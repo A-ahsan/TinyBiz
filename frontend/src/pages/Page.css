@@ -1,0 +1,30 @@
+.page-container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.page-container h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--gray-900);
+  margin-bottom: 0.5rem;
+}
+
+.page-container > p {
+  font-size: 1rem;
+  color: var(--gray-600);
+  margin-bottom: 2rem;
+}
+
+.placeholder {
+  background-color: white;
+  border: 2px dashed var(--gray-300);
+  border-radius: 0.5rem;
+  padding: 4rem 2rem;
+  text-align: center;
+}
+
+.placeholder p {
+  color: var(--gray-600);
+  font-size: 1rem;
+}
