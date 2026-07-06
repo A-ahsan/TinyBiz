@@ -14,6 +14,10 @@ create table if not exists profiles (
 
 alter table profiles enable row level security;
 
+create policy "Users can insert their own profile"
+  on profiles for insert
+  with check (id = auth.uid());
+
 create policy "Users can view their own profile"
   on profiles for select
   using (id = auth.uid());
@@ -148,7 +152,8 @@ create table if not exists sale_line_items (
   product_id uuid not null references products(id),
   quantity numeric(12,3) not null check (quantity > 0),
   sale_rate numeric(12,2) not null check (sale_rate >= 0),
-  line_total numeric(14,2) generated always as (quantity * sale_rate) stored
+  line_total numeric(14,2) generated always as (quantity * sale_rate) stored,
+  created_at timestamptz default now()
 );
 
 alter table sale_line_items enable row level security;
@@ -293,3 +298,174 @@ create index if not exists idx_sellers_status on sellers(status);
 
 create index if not exists idx_buyers_user_id on buyers(user_id);
 create index if not exists idx_buyers_status on buyers(status);
+
+-- =============================================================================
+-- 13. ATOMIC SALE RPC: perform_sale(...)
+-- Implements FIFO allocation and creates sale, line items, allocations atomically.
+-- Input: JSON array of line items: [{"product_id":"...","quantity":1.5,"sale_rate":120.00}, ...]
+-- Returns: created sale id (uuid)
+-- Usage: select perform_sale('<buyer_id>'::uuid, 'INV-0001', '2026-06-29'::date, 7200.00, '[{"product_id":"...","quantity":60,"sale_rate":120}]'::json);
+-- The function uses auth.uid() for the user scope to satisfy RLS.
+-- =============================================================================
+
+create or replace function perform_sale(
+  p_buyer_id uuid,
+  p_invoice_number text,
+  p_date date,
+  p_amount_received numeric,
+  p_lines json
+)
+returns uuid
+language plpgsql
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_sale_id uuid;
+  v_line json;
+  v_product_id uuid;
+  v_qty numeric;
+  v_rate numeric;
+  v_available numeric;
+  v_sli_id uuid;
+  v_alloc_qty numeric;
+  v_total_cost numeric := 0;
+  v_rec record;
+begin
+  if v_user_id is null then
+    raise exception 'not authenticated';
+  end if;
+
+  -- Create sale header
+  insert into sales(user_id, buyer_id, invoice_number, date, amount_received)
+  values (v_user_id, p_buyer_id, p_invoice_number, p_date, p_amount_received)
+  returning id into v_sale_id;
+
+  -- Iterate lines
+  for v_line in select * from json_array_elements(p_lines) loop
+    v_product_id := (v_line ->> 'product_id')::uuid;
+    v_qty := (v_line ->> 'quantity')::numeric;
+    v_rate := (v_line ->> 'sale_rate')::numeric;
+
+    -- Check available stock (sum of remaining_qty)
+    select coalesce(sum(remaining_qty),0) into v_available
+      from purchases
+      where user_id = v_user_id and product_id = v_product_id and status = 'active' and remaining_qty > 0;
+
+    if v_available < v_qty then
+      raise exception 'insufficient stock for product %: available % requested %', v_product_id, v_available, v_qty;
+    end if;
+
+    -- Insert line item
+    insert into sale_line_items(sale_id, product_id, quantity, sale_rate)
+    values (v_sale_id, v_product_id, v_qty, v_rate)
+    returning id into v_sli_id;
+
+    -- Allocate FIFO from purchases
+    for v_rec in
+      select id, remaining_qty, buying_rate
+      from purchases
+      where user_id = v_user_id and product_id = v_product_id and status = 'active' and remaining_qty > 0
+      order by date asc, created_at asc
+    loop
+      exit when v_qty <= 0;
+      v_alloc_qty := least(v_rec.remaining_qty, v_qty);
+      insert into sale_allocations(sale_line_item_id, purchase_id, quantity_allocated, cost_allocated)
+      values (v_sli_id, v_rec.id, v_alloc_qty, round((v_alloc_qty * v_rec.buying_rate)::numeric, 2));
+
+      update purchases set remaining_qty = remaining_qty - v_alloc_qty where id = v_rec.id;
+
+      v_total_cost := v_total_cost + round((v_alloc_qty * v_rec.buying_rate)::numeric, 2);
+      v_qty := v_qty - v_alloc_qty;
+    end loop;
+  end loop;
+
+  return v_sale_id;
+end;
+$$;
+
+-- =============================================================================
+-- 14. VOID OPERATIONS
+-- Purchase can only be voided before any allocation has reduced remaining_qty.
+-- Sale void reverses all FIFO allocations and restores purchase remaining_qty.
+-- =============================================================================
+
+create or replace function void_purchase(p_purchase_id uuid)
+returns void
+language plpgsql
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_purchase record;
+begin
+  if v_user_id is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select * into v_purchase
+  from purchases
+  where id = p_purchase_id and user_id = v_user_id
+  for update;
+
+  if not found then
+    raise exception 'purchase not found';
+  end if;
+
+  if v_purchase.status <> 'active' then
+    raise exception 'purchase is already voided';
+  end if;
+
+  if v_purchase.remaining_qty <> v_purchase.quantity then
+    raise exception 'purchase cannot be voided because stock has already been allocated';
+  end if;
+
+  update purchases
+    set status = 'voided'
+  where id = p_purchase_id
+    and user_id = v_user_id;
+end;
+$$;
+
+create or replace function void_sale(p_sale_id uuid)
+returns void
+language plpgsql
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_sale record;
+  v_alloc record;
+begin
+  if v_user_id is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select * into v_sale
+  from sales
+  where id = p_sale_id and user_id = v_user_id
+  for update;
+
+  if not found then
+    raise exception 'sale not found';
+  end if;
+
+  if v_sale.status <> 'active' then
+    raise exception 'sale is already voided';
+  end if;
+
+  for v_alloc in
+    select sa.quantity_allocated, sa.purchase_id
+    from sale_allocations sa
+    join sale_line_items sli on sli.id = sa.sale_line_item_id
+    where sli.sale_id = p_sale_id
+  loop
+    update purchases
+      set remaining_qty = remaining_qty + v_alloc.quantity_allocated
+    where id = v_alloc.purchase_id;
+  end loop;
+
+  update sales
+    set status = 'voided'
+  where id = p_sale_id
+    and user_id = v_user_id;
+end;
+$$;
+

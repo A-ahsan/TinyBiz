@@ -1,0 +1,31 @@
+.purchase-form {
+  max-width: 900px;
+  margin-top: 1rem;
+}
+
+.form-row {
+  display: flex;
+  gap: 1rem;
+}
+
+.form-row .form-group {
+  flex: 1;
+}
+
+.small-note {
+  font-size: 0.9rem;
+  color: var(--gray-600);
+  margin-top: 0.5rem;
+}
+
+.purchases-table {
+  margin-top: 2rem;
+}
+
+.purchases-table table {
+  width: 100%;
+}
+
+.success-message {
+  margin-top: 1rem;
+}

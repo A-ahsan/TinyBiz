@@ -9,6 +9,8 @@ import Sellers from './pages/Sellers';
 import Buyers from './pages/Buyers';
 import RecordPurchase from './pages/RecordPurchase';
 import RecordSale from './pages/RecordSale';
+import RecordPayment from './pages/RecordPayment';
+import Invoice from './pages/Invoice';
 import Reports from './pages/Reports';
 import './App.css';
 
@@ -56,78 +58,17 @@ function App() {
     <Router>
       <AuthProvider>
         <Routes>
-          <Route
-            path="/signup"
-            element={
-              <AuthRoute>
-                <SignUp />
-              </AuthRoute>
-            }
-          />
-          <Route
-            path="/signin"
-            element={
-              <AuthRoute>
-                <SignIn />
-              </AuthRoute>
-            }
-          />
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute>
-                <Dashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/products"
-            element={
-              <ProtectedRoute>
-                <Products />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/sellers"
-            element={
-              <ProtectedRoute>
-                <Sellers />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/buyers"
-            element={
-              <ProtectedRoute>
-                <Buyers />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/purchase"
-            element={
-              <ProtectedRoute>
-                <RecordPurchase />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/sale"
-            element={
-              <ProtectedRoute>
-                <RecordSale />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/reports"
-            element={
-              <ProtectedRoute>
-                <Reports />
-              </ProtectedRoute>
-            }
-          />
+          <Route path="/signup" element={<AuthRoute><SignUp /></AuthRoute>} />
+          <Route path="/signin" element={<AuthRoute><SignIn /></AuthRoute>} />
+          <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/products" element={<ProtectedRoute><Products /></ProtectedRoute>} />
+          <Route path="/sellers" element={<ProtectedRoute><Sellers /></ProtectedRoute>} />
+          <Route path="/buyers" element={<ProtectedRoute><Buyers /></ProtectedRoute>} />
+          <Route path="/purchase" element={<ProtectedRoute><RecordPurchase /></ProtectedRoute>} />
+          <Route path="/sale" element={<ProtectedRoute><RecordSale /></ProtectedRoute>} />
+          <Route path="/payment" element={<ProtectedRoute><RecordPayment /></ProtectedRoute>} />
+          <Route path="/invoice/:saleId" element={<ProtectedRoute><Invoice /></ProtectedRoute>} />
+          <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </AuthProvider>
