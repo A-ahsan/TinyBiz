@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { jsPDF } from 'jspdf';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/AuthContext';
@@ -8,6 +8,7 @@ import './Invoice.css';
 
 const Invoice = () => {
   const { saleId } = useParams();
+  const location = useLocation();
   const { profile } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -15,8 +16,6 @@ const Invoice = () => {
   const [buyer, setBuyer] = useState(null);
   const [lineItems, setLineItems] = useState([]);
   const [products, setProducts] = useState([]);
-  const [allocations, setAllocations] = useState([]);
-  const [voiding, setVoiding] = useState(false);
 
   useEffect(() => {
     if (saleId) {
@@ -53,25 +52,19 @@ const Invoice = () => {
       if (lineErr) throw lineErr;
 
       const productIds = [...new Set((lineData || []).map(item => item.product_id))];
-      const lineItemIds = (lineData || []).map(item => item.id);
 
-      const [productResult, allocationResult] = await Promise.all([
+      const [productResult] = await Promise.all([
         productIds.length
           ? supabase.from('products').select('id, name, unit').in('id', productIds)
-          : Promise.resolve({ data: [], error: null }),
-        lineItemIds.length
-          ? supabase.from('sale_allocations').select('sale_line_item_id, purchase_id, quantity_allocated, cost_allocated').in('sale_line_item_id', lineItemIds)
           : Promise.resolve({ data: [], error: null }),
       ]);
 
       if (productResult.error) throw productResult.error;
-      if (allocationResult.error) throw allocationResult.error;
 
       setSale(saleData);
       setBuyer(buyerData);
       setLineItems(lineData || []);
       setProducts(productResult.data || []);
-      setAllocations(allocationResult.data || []);
     } catch (err) {
       setError(err.message || 'Failed to load invoice');
     } finally {
@@ -81,16 +74,13 @@ const Invoice = () => {
 
   const summary = useMemo(() => {
     const subtotal = lineItems.reduce((sum, line) => sum + Number(line.line_total || 0), 0);
-    const totalCost = allocations.reduce((sum, row) => sum + Number(row.cost_allocated || 0), 0);
     const amountReceived = Number(sale?.amount_received || 0);
     return {
       subtotal,
-      totalCost,
-      profit: subtotal - totalCost,
       due: Math.max(subtotal - amountReceived, 0),
       advance: Math.max(amountReceived - subtotal, 0),
     };
-  }, [lineItems, allocations, sale]);
+  }, [lineItems, sale]);
 
   const getProductName = (productId) => products.find(product => product.id === productId)?.name || 'Unknown product';
 
@@ -138,31 +128,18 @@ const Invoice = () => {
     doc.text(`Due: ${formatCurrency(summary.due)}`, 14, y);
     y += 6;
     doc.text(`Advance: ${formatCurrency(summary.advance)}`, 14, y);
-    y += 6;
-    doc.text(`Cost of Goods: ${formatCurrency(summary.totalCost)}`, 14, y);
-    y += 6;
-    doc.text(`Profit: ${formatCurrency(summary.profit)}`, 14, y);
 
     doc.save(`${sale.invoice_number || 'invoice'}.pdf`);
   };
 
-  const handleVoidSale = async () => {
-    if (!sale || sale.status !== 'active') return;
-    const confirmed = window.confirm('Void this sale? This will reverse FIFO allocations and restore stock.');
-    if (!confirmed) return;
-
-    try {
-      setVoiding(true);
-      setError('');
-      const { error: voidErr } = await supabase.rpc('void_sale', { p_sale_id: sale.id });
-      if (voidErr) throw voidErr;
-      await loadInvoice();
-    } catch (err) {
-      setError(err.message || 'Failed to void sale');
-    } finally {
-      setVoiding(false);
+  useEffect(() => {
+    if (loading || !sale || !buyer) return;
+    const params = new URLSearchParams(location.search);
+    const shouldAutoDownload = params.get('autodownload') === '1';
+    if (shouldAutoDownload) {
+      downloadPdf();
     }
-  };
+  }, [loading, sale, buyer, location.search]);
 
   if (loading) {
     return (
@@ -190,11 +167,6 @@ const Invoice = () => {
         </div>
         <div className="invoice-actions">
           <button type="button" className="btn-secondary" onClick={downloadPdf}>Download PDF</button>
-          {sale.status === 'active' && (
-            <button type="button" className="btn-secondary" onClick={handleVoidSale} disabled={voiding}>
-              {voiding ? 'Voiding...' : 'Void Sale'}
-            </button>
-          )}
           <Link to="/sale" className="btn-primary">New Sale</Link>
         </div>
       </div>
@@ -249,8 +221,6 @@ const Invoice = () => {
           <div><span>Amount Received</span><strong>{formatCurrency(Number(sale.amount_received || 0))}</strong></div>
           <div><span>Due</span><strong>{formatCurrency(summary.due)}</strong></div>
           <div><span>Advance</span><strong>{formatCurrency(summary.advance)}</strong></div>
-          <div><span>Cost of Goods</span><strong>{formatCurrency(summary.totalCost)}</strong></div>
-          <div><span>Profit</span><strong>{formatCurrency(summary.profit)}</strong></div>
         </div>
       </div>
     </div>

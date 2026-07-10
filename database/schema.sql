@@ -28,6 +28,29 @@ create policy "Users can update their own profile"
   with check (id = auth.uid());
 
 -- =============================================================================
+-- 1.5 PRODUCT CATEGORIES TABLE
+-- =============================================================================
+
+create table if not exists product_categories (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  status text not null default 'active' check (status in ('active','removed')),
+  created_at timestamptz default now()
+);
+
+alter table product_categories enable row level security;
+
+create policy "Users manage their own product categories"
+  on product_categories for all
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());
+
+create unique index if not exists idx_product_categories_user_name_active
+  on product_categories (user_id, lower(name))
+  where status = 'active';
+
+-- =============================================================================
 -- 2. PRODUCTS TABLE
 -- =============================================================================
 
@@ -47,6 +70,24 @@ create policy "Users manage their own products"
   on products for all
   using (user_id = auth.uid())
   with check (user_id = auth.uid());
+
+-- Add category support to products for existing databases.
+alter table products add column if not exists category_id uuid;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'products_category_id_fkey'
+      and conrelid = 'products'::regclass
+  ) then
+    alter table products
+      add constraint products_category_id_fkey
+      foreign key (category_id) references product_categories(id);
+  end if;
+end
+$$;
 
 -- =============================================================================
 -- 3. SELLERS TABLE
@@ -292,6 +333,10 @@ create index if not exists idx_payments_date on payments(date);
 
 create index if not exists idx_products_user_id on products(user_id);
 create index if not exists idx_products_status on products(status);
+create index if not exists idx_products_category_id on products(category_id);
+
+create index if not exists idx_product_categories_user_id on product_categories(user_id);
+create index if not exists idx_product_categories_status on product_categories(status);
 
 create index if not exists idx_sellers_user_id on sellers(user_id);
 create index if not exists idx_sellers_status on sellers(status);

@@ -7,16 +7,20 @@ import './Products.css';
 const Products = () => {
   const { user } = useAuth();
   const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [showAddCategory, setShowAddCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
   const [formData, setFormData] = useState({
     name: '',
     set_rate: '',
     unit: '',
+    category_id: '',
   });
 
   useEffect(() => {
@@ -29,14 +33,24 @@ const Products = () => {
     try {
       setLoading(true);
       setError('');
-      const { data, error: err } = await supabase
-        .from('products')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
+      const [productsResult, categoriesResult] = await Promise.all([
+        supabase
+          .from('products')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('product_categories')
+          .select('id, name, status')
+          .eq('user_id', user.id)
+          .eq('status', 'active')
+          .order('name', { ascending: true }),
+      ]);
 
-      if (err) throw err;
-      setProducts(data || []);
+      if (productsResult.error) throw productsResult.error;
+      if (categoriesResult.error) throw categoriesResult.error;
+      setProducts(productsResult.data || []);
+      setCategories(categoriesResult.data || []);
     } catch (err) {
       setError(err.message || 'Failed to fetch products');
     } finally {
@@ -53,9 +67,38 @@ const Products = () => {
   };
 
   const resetForm = () => {
-    setFormData({ name: '', set_rate: '', unit: '' });
+    setFormData({ name: '', set_rate: '', unit: '', category_id: '' });
+    setShowAddCategory(false);
+    setNewCategoryName('');
     setEditingId(null);
     setShowForm(false);
+  };
+
+  const addCategory = async () => {
+    const trimmed = newCategoryName.trim();
+    if (!trimmed) {
+      setError('Category name is required');
+      return;
+    }
+
+    try {
+      setError('');
+      const payload = { user_id: user.id, name: trimmed };
+      const { data, error: insErr } = await supabase
+        .from('product_categories')
+        .insert([payload])
+        .select('id, name')
+        .single();
+
+      if (insErr) throw insErr;
+
+      setCategories(prev => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
+      setFormData(prev => ({ ...prev, category_id: data.id }));
+      setShowAddCategory(false);
+      setNewCategoryName('');
+    } catch (err) {
+      setError(err.message || 'Failed to add category');
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -73,6 +116,7 @@ const Products = () => {
         name: formData.name.trim(),
         unit: formData.unit.trim() || null,
         set_rate: formData.set_rate ? parseFloat(formData.set_rate) : null,
+        category_id: formData.category_id || null,
       };
 
       if (editingId) {
@@ -108,10 +152,13 @@ const Products = () => {
       name: product.name,
       set_rate: product.set_rate || '',
       unit: product.unit || '',
+      category_id: product.category_id || '',
     });
     setEditingId(product.id);
     setShowForm(true);
   };
+
+  const categoryNameById = (categoryId) => categories.find(c => c.id === categoryId)?.name || '-';
 
   const handleDelete = async (id) => {
     if (!confirm('Are you sure? This will archive the product.')) return;
@@ -133,9 +180,11 @@ const Products = () => {
     }
   };
 
-  const filteredProducts = products.filter(p =>
-    p.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredProducts = products.filter((p) => {
+    const categoryName = categoryNameById(p.category_id);
+    const text = `${p.name} ${categoryName}`.toLowerCase();
+    return text.includes(searchTerm.toLowerCase());
+  });
 
   const activeCount = products.filter(p => p.status === 'active').length;
   const archivedCount = products.filter(p => p.status === 'removed').length;
@@ -204,6 +253,40 @@ const Products = () => {
 
               <div className="form-row">
                 <div className="form-group">
+                  <label>Category (Optional)</label>
+                  <div className="category-input-row">
+                    <select
+                      name="category_id"
+                      value={formData.category_id}
+                      onChange={handleInputChange}
+                    >
+                      <option value="">No category</option>
+                      {categories.map(category => (
+                        <option key={category.id} value={category.id}>{category.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setShowAddCategory(prev => !prev)}
+                    >
+                      {showAddCategory ? 'Cancel' : 'Add'}
+                    </button>
+                  </div>
+                  {showAddCategory && (
+                    <div className="category-create-row">
+                      <input
+                        type="text"
+                        value={newCategoryName}
+                        onChange={(e) => setNewCategoryName(e.target.value)}
+                        placeholder="Category name"
+                      />
+                      <button type="button" className="btn-primary" onClick={addCategory}>Create</button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="form-group">
                   <label>Unit (Optional)</label>
                   <input
                     type="text"
@@ -270,6 +353,7 @@ const Products = () => {
               <thead>
                 <tr>
                   <th>Name</th>
+                  <th>Category</th>
                   <th>Unit</th>
                   <th>Set Rate (BDT)</th>
                   <th>Status</th>
@@ -280,6 +364,7 @@ const Products = () => {
                 {filteredProducts.map(product => (
                   <tr key={product.id} className={product.status === 'removed' ? 'archived' : ''}>
                     <td className="name-cell">{product.name}</td>
+                    <td>{categoryNameById(product.category_id)}</td>
                     <td>{product.unit || '-'}</td>
                     <td>
                       {product.set_rate ? `${product.set_rate.toFixed(2)}` : '-'}

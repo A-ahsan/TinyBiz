@@ -4,6 +4,8 @@ import { useAuth } from '../lib/AuthContext';
 import './Page.css';
 import './RecordPurchase.css';
 
+const emptyLine = { product_id: '', quantity: '', buying_rate: '', amount_paid: '' };
+
 const RecordPurchase = () => {
   const { user } = useAuth();
   const [sellers, setSellers] = useState([]);
@@ -13,12 +15,9 @@ const RecordPurchase = () => {
   const [success, setSuccess] = useState('');
   const [form, setForm] = useState({
     seller_id: '',
-    product_id: '',
     date: new Date().toISOString().split('T')[0],
-    quantity: '',
-    buying_rate: '',
-    amount_paid: '',
   });
+  const [lines, setLines] = useState([{ ...emptyLine }]);
   const [showAddSeller, setShowAddSeller] = useState(false);
   const [newSeller, setNewSeller] = useState({ name: '', store_name: '' });
 
@@ -49,7 +48,25 @@ const RecordPurchase = () => {
     setForm(prev => ({ ...prev, [name]: value }));
   };
 
-  const resetForm = () => setForm({ seller_id: '', product_id: '', date: new Date().toISOString().split('T')[0], quantity: '', buying_rate: '', amount_paid: '' });
+  const resetForm = () => {
+    setForm({ seller_id: '', date: new Date().toISOString().split('T')[0] });
+    setLines([{ ...emptyLine }]);
+  };
+
+  const handleLineChange = (index, field, value) => {
+    setLines(prev => prev.map((line, i) => (i === index ? { ...line, [field]: value } : line)));
+  };
+
+  const addLine = () => {
+    setLines(prev => [...prev, { ...emptyLine }]);
+  };
+
+  const removeLine = (index) => {
+    setLines(prev => {
+      if (prev.length === 1) return prev;
+      return prev.filter((_, i) => i !== index);
+    });
+  };
 
   const handleNewSellerChange = (e) => {
     const { name, value } = e.target;
@@ -83,26 +100,51 @@ const RecordPurchase = () => {
 
     // Validation
     if (!form.seller_id) return setError('Please select a seller');
-    if (!form.product_id) return setError('Please select a product');
-    if (!form.quantity || Number(form.quantity) <= 0) return setError('Quantity must be greater than zero');
-    if (form.buying_rate === '' || Number(form.buying_rate) < 0) return setError('Buying rate must be zero or greater');
+
+    const cleanedLines = lines
+      .map((line) => ({
+        product_id: line.product_id,
+        quantity: line.quantity === '' ? '' : Number(line.quantity),
+        buying_rate: line.buying_rate === '' ? '' : Number(line.buying_rate),
+        amount_paid: line.amount_paid === '' ? 0 : Number(line.amount_paid),
+      }))
+      .filter((line) => line.product_id || line.quantity !== '' || line.buying_rate !== '' || line.amount_paid !== 0);
+
+    if (cleanedLines.length === 0) return setError('Add at least one item');
+
+    for (let i = 0; i < cleanedLines.length; i += 1) {
+      const line = cleanedLines[i];
+      if (!line.product_id) return setError(`Line ${i + 1}: please select a product`);
+      if (line.quantity === '' || Number.isNaN(line.quantity) || line.quantity <= 0) {
+        return setError(`Line ${i + 1}: quantity must be greater than zero`);
+      }
+      if (line.buying_rate === '' || Number.isNaN(line.buying_rate) || line.buying_rate < 0) {
+        return setError(`Line ${i + 1}: buying rate must be zero or greater`);
+      }
+      if (Number.isNaN(line.amount_paid) || line.amount_paid < 0) {
+        return setError(`Line ${i + 1}: amount paid cannot be negative`);
+      }
+    }
 
     try {
-      const payload = {
-        user_id: user.id,
-        seller_id: form.seller_id,
-        product_id: form.product_id,
-        date: form.date,
-        quantity: Number(parseFloat(form.quantity).toFixed(3)),
-        buying_rate: Number(parseFloat(form.buying_rate).toFixed(2)),
-        amount_paid: form.amount_paid ? Number(parseFloat(form.amount_paid).toFixed(2)) : 0,
-        remaining_qty: Number(parseFloat(form.quantity).toFixed(3)),
-      };
+      const payload = cleanedLines.map((line) => {
+        const qty = Number(parseFloat(line.quantity).toFixed(3));
+        return {
+          user_id: user.id,
+          seller_id: form.seller_id,
+          product_id: line.product_id,
+          date: form.date,
+          quantity: qty,
+          buying_rate: Number(parseFloat(line.buying_rate).toFixed(2)),
+          amount_paid: Number(parseFloat(line.amount_paid || 0).toFixed(2)),
+          remaining_qty: qty,
+        };
+      });
 
-      const { error: insertErr } = await supabase.from('purchases').insert([payload]);
+      const { error: insertErr } = await supabase.from('purchases').insert(payload);
       if (insertErr) throw insertErr;
 
-      setSuccess('Purchase recorded successfully');
+      setSuccess(`${payload.length} purchase item${payload.length > 1 ? 's' : ''} recorded successfully`);
       resetForm();
       setTimeout(() => setSuccess(''), 4000);
     } catch (err) {
@@ -118,7 +160,7 @@ const RecordPurchase = () => {
       <div className="page-header">
         <div>
           <h1>Record Purchase</h1>
-          <p>Record a new purchase batch from a seller.</p>
+          <p>Record one or more purchase items from a single seller.</p>
         </div>
       </div>
 
@@ -149,13 +191,6 @@ const RecordPurchase = () => {
             )}
           </div>
 
-          <div className="form-group">
-            <label>Product *</label>
-            <select name="product_id" value={form.product_id} onChange={handleChange} required>
-              <option value="">Select product</option>
-              {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </div>
         </div>
 
         <div className="form-row">
@@ -163,29 +198,71 @@ const RecordPurchase = () => {
             <label>Date *</label>
             <input type="date" name="date" value={form.date} onChange={handleChange} required />
           </div>
-
-          <div className="form-group">
-            <label>Quantity *</label>
-            <input type="number" name="quantity" value={form.quantity} onChange={handleChange} required step="0.001" min="0.001" />
-          </div>
-
-          <div className="form-group">
-            <label>Buying Rate (BDT) *</label>
-            <input type="number" name="buying_rate" value={form.buying_rate} onChange={handleChange} required step="0.01" min="0" />
-          </div>
         </div>
 
-        <div className="form-row">
-          <div className="form-group">
-            <label>Amount Paid</label>
-            <input type="number" name="amount_paid" value={form.amount_paid} onChange={handleChange} step="0.01" min="0" />
-            <p className="small-note">Enter amount paid now. Remaining will be a due or advance.</p>
-          </div>
+        <div className="purchase-lines">
+          {lines.map((line, index) => (
+            <div className="purchase-line" key={`line-${index}`}>
+              <div className="form-group">
+                <label>Product *</label>
+                <select
+                  value={line.product_id}
+                  onChange={(e) => handleLineChange(index, 'product_id', e.target.value)}
+                  required
+                >
+                  <option value="">Select product</option>
+                  {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>Quantity *</label>
+                <input
+                  type="number"
+                  value={line.quantity}
+                  onChange={(e) => handleLineChange(index, 'quantity', e.target.value)}
+                  required
+                  step="0.001"
+                  min="0.001"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Buying Rate (BDT) *</label>
+                <input
+                  type="number"
+                  value={line.buying_rate}
+                  onChange={(e) => handleLineChange(index, 'buying_rate', e.target.value)}
+                  required
+                  step="0.01"
+                  min="0"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Amount Paid</label>
+                <input
+                  type="number"
+                  value={line.amount_paid}
+                  onChange={(e) => handleLineChange(index, 'amount_paid', e.target.value)}
+                  step="0.01"
+                  min="0"
+                />
+              </div>
+
+              <div className="line-actions">
+                <button type="button" className="btn-secondary" onClick={() => removeLine(index)} disabled={lines.length === 1}>Remove</button>
+              </div>
+            </div>
+          ))}
+
+          <button type="button" className="btn-secondary" onClick={addLine}>+ Add Item</button>
+          <p className="small-note">Each item creates its own purchase batch while keeping the same seller and date.</p>
         </div>
 
         <div className="form-actions" style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
           <button type="button" onClick={resetForm} className="btn-secondary">Reset</button>
-          <button type="submit" className="btn-primary">Record Purchase</button>
+          <button type="submit" className="btn-primary">Record Purchase Items</button>
         </div>
       </form>
     </div>

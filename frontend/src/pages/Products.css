@@ -20,6 +20,21 @@
 .form-group label { display:block; font-weight:600; margin-bottom:0.25rem; }
 .form-group input, .form-group select { width:100%; padding:0.5rem; border:1px solid #e5e7eb; border-radius:8px; }
 
+.category-input-row {
+	display: flex;
+	gap: 0.5rem;
+}
+
+.category-create-row {
+	display: flex;
+	gap: 0.5rem;
+	margin-top: 0.5rem;
+}
+
+.category-create-row input {
+	flex: 1;
+}
+
 .form-row { display:flex; gap:1rem; }
 .form-row .form-group { flex:1; }
 .form-actions { display:flex; justify-content:flex-end; gap:1rem; margin-top:0.75rem; }
