@@ -51,7 +51,89 @@
   color: var(--gray-900);
 }
 
+.payment-balance-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border-radius: 12px;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  color: var(--gray-700);
+}
+
+.payment-balance-card strong {
+  white-space: nowrap;
+}
+
+.balance-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.balance-pill.due {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.balance-pill.advance {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.balance-pill.settled {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.recent-payments {
+  margin-top: 1.5rem;
+}
+
+.recent-payments h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.75rem;
+  color: var(--gray-800);
+}
+
+.recent-payments .report-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--gray-200);
+  border-radius: 12px;
+}
+
+.recent-payments .report-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.recent-payments .report-table th,
+.recent-payments .report-table td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.recent-payments .report-table th {
+  background: var(--gray-50);
+  font-weight: 700;
+  color: var(--gray-700);
+}
+
 @media (max-width: 768px) {
+  .payment-balance-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .payment-switch {
     grid-template-columns: 1fr;
   }

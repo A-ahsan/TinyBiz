@@ -208,6 +208,11 @@
   color: #166534;
 }
 
+.type-pill.payment {
+  background: #fef3c7;
+  color: #92400e;
+}
+
 .balance-pill.due {
   background: #fee2e2;
   color: #991b1b;

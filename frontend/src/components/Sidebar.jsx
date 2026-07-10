@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../lib/AuthContext';
-import { LogOut, BarChart3, ShoppingCart, Users, FileText, TrendingUp, Home } from 'lucide-react';
+import { LogOut, BarChart3, ShoppingCart, Users, FileText, TrendingUp, Home, Wallet } from 'lucide-react';
 import './Sidebar.css';
 
 const Sidebar = () => {
@@ -39,6 +39,10 @@ const Sidebar = () => {
           <Link to="/sale" className={`nav-link ${isActive('/sale') ? 'active' : ''}`}>
             <FileText size={20} />
             <span>Record Sale</span>
+          </Link>
+          <Link to="/payment" className={`nav-link ${isActive('/payment') ? 'active' : ''}`}>
+            <Wallet size={20} />
+            <span>Record Payment</span>
           </Link>
         </div>
 

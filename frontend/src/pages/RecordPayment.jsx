@@ -5,11 +5,19 @@ import { formatCurrency } from '../utils/helpers';
 import { Plus } from 'lucide-react';
 import './RecordPayment.css';
 
+const formatBalanceLabel = (balance) => {
+  const value = Number(balance || 0);
+  if (value === 0) return { label: 'Settled', amount: 0, className: 'settled' };
+  if (value > 0) return { label: 'Due', amount: value, className: 'due' };
+  return { label: 'Advance', amount: Math.abs(value), className: 'advance' };
+};
+
 const RecordPayment = () => {
   const { user } = useAuth();
   const [partyType, setPartyType] = useState('seller');
   const [parties, setParties] = useState([]);
-  const [linkedTransactions, setLinkedTransactions] = useState([]);
+  const [balances, setBalances] = useState({});
+  const [recentPayments, setRecentPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -18,77 +26,66 @@ const RecordPayment = () => {
     partyId: '',
     amount: '',
     date: new Date().toISOString().slice(0, 10),
-    paymentType: 'settlement',
-    linkedId: '',
   });
 
   useEffect(() => {
     if (user) {
-      loadParties();
+      loadData();
     }
   }, [user, partyType]);
 
-  useEffect(() => {
-    if (user && formData.partyId) {
-      loadLinkedTransactions();
-    } else {
-      setLinkedTransactions([]);
-      setFormData(prev => ({ ...prev, linkedId: '' }));
-    }
-  }, [user, formData.partyId, partyType]);
-
-  const loadParties = async () => {
+  const loadData = async () => {
     try {
       setLoading(true);
       setError('');
-      const table = partyType === 'seller' ? 'sellers' : 'buyers';
-      const { data, error: err } = await supabase
-        .from(table)
-        .select('id, name, store_name, status')
-        .eq('user_id', user.id)
-        .eq('status', 'active')
-        .order('name', { ascending: true });
 
-      if (err) throw err;
-      setParties(data || []);
+      const table = partyType === 'seller' ? 'sellers' : 'buyers';
+      const balanceView = partyType === 'seller' ? 'seller_balances' : 'buyer_balances';
+      const balanceKey = partyType === 'seller' ? 'seller_id' : 'buyer_id';
+
+      const [partiesResult, balancesResult, paymentsResult] = await Promise.all([
+        supabase
+          .from(table)
+          .select('id, name, store_name, status')
+          .eq('user_id', user.id)
+          .eq('status', 'active')
+          .order('name', { ascending: true }),
+        supabase
+          .from(balanceView)
+          .select(`${balanceKey}, running_balance`)
+          .eq('user_id', user.id),
+        supabase
+          .from('payments')
+          .select('id, direction, party_type, party_id, amount, date, payment_type, created_at')
+          .eq('user_id', user.id)
+          .eq('party_type', partyType)
+          .order('date', { ascending: false })
+          .order('created_at', { ascending: false })
+          .limit(10),
+      ]);
+
+      if (partiesResult.error) throw partiesResult.error;
+      if (balancesResult.error) throw balancesResult.error;
+      if (paymentsResult.error) throw paymentsResult.error;
+
+      const balanceMap = {};
+      (balancesResult.data || []).forEach((row) => {
+        balanceMap[row[balanceKey]] = row.running_balance;
+      });
+
+      setParties(partiesResult.data || []);
+      setBalances(balanceMap);
+      setRecentPayments(paymentsResult.data || []);
     } catch (err) {
-      setError(err.message || 'Failed to load parties');
+      setError(err.message || 'Failed to load payment data');
     } finally {
       setLoading(false);
     }
   };
 
-  const loadLinkedTransactions = async () => {
-    try {
-      const table = partyType === 'seller' ? 'purchases' : 'sales';
-      const foreignKey = partyType === 'seller' ? 'seller_id' : 'buyer_id';
-      const selectFields = partyType === 'seller'
-        ? 'id, date, total_cost, amount_paid'
-        : 'id, date, invoice_number, amount_received';
-
-      const { data, error: err } = await supabase
-        .from(table)
-        .select(selectFields)
-        .eq('user_id', user.id)
-        .eq(foreignKey, formData.partyId)
-        .eq('status', 'active')
-        .order('date', { ascending: false })
-        .limit(20);
-
-      if (err) throw err;
-      setLinkedTransactions(data || []);
-    } catch (err) {
-      setError(err.message || 'Failed to load linked transactions');
-      setLinkedTransactions([]);
-    }
-  };
-
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value,
-    }));
+    setFormData(prev => ({ ...prev, [name]: value }));
   };
 
   const handlePartyTypeChange = (value) => {
@@ -97,10 +94,7 @@ const RecordPayment = () => {
       partyId: '',
       amount: '',
       date: new Date().toISOString().slice(0, 10),
-      paymentType: 'settlement',
-      linkedId: '',
     });
-    setLinkedTransactions([]);
     setSuccess('');
     setError('');
   };
@@ -129,31 +123,24 @@ const RecordPayment = () => {
         party_type: partyType,
         party_id: formData.partyId,
         amount,
-        payment_type: formData.paymentType,
+        payment_type: 'settlement',
         date: formData.date,
         linked_purchase_id: null,
         linked_sale_id: null,
       };
 
-      if (formData.linkedId) {
-        if (partyType === 'seller') {
-          payload.linked_purchase_id = formData.linkedId;
-        } else {
-          payload.linked_sale_id = formData.linkedId;
-        }
-      }
-
       const { error: err } = await supabase.from('payments').insert(payload);
       if (err) throw err;
 
-      setSuccess('Payment recorded successfully');
+      const partyName = parties.find(p => p.id === formData.partyId)?.name || 'party';
+      const actionLabel = partyType === 'seller' ? 'Paid to' : 'Received from';
+      setSuccess(`${actionLabel} ${partyName}: ${formatCurrency(amount)}`);
       setFormData(prev => ({
         ...prev,
         partyId: '',
         amount: '',
-        linkedId: '',
       }));
-      setLinkedTransactions([]);
+      await loadData();
     } catch (err) {
       setError(err.message || 'Failed to record payment');
     } finally {
@@ -162,6 +149,12 @@ const RecordPayment = () => {
   };
 
   const selectedParty = parties.find(p => p.id === formData.partyId);
+  const selectedBalance = formData.partyId ? balances[formData.partyId] : null;
+  const balanceInfo = selectedBalance !== null && selectedBalance !== undefined
+    ? formatBalanceLabel(selectedBalance)
+    : null;
+
+  const partyNameMap = Object.fromEntries(parties.map(p => [p.id, p.name]));
 
   if (loading) {
     return (
@@ -176,7 +169,11 @@ const RecordPayment = () => {
       <div className="page-header">
         <div>
           <h1>Record Payment</h1>
-          <p>Clear dues or log advances for sellers and buyers.</p>
+          <p>
+            {partyType === 'seller'
+              ? 'Pay a seller directly — no purchase required.'
+              : 'Record money received from a buyer — no sale required.'}
+          </p>
         </div>
       </div>
 
@@ -214,59 +211,102 @@ const RecordPayment = () => {
             </select>
           </div>
 
+          {selectedParty && balanceInfo && (
+            <div className="payment-balance-card">
+              <span>Current balance with {selectedParty.name}</span>
+              <strong className={`balance-pill ${balanceInfo.className}`}>
+                {balanceInfo.amount === 0
+                  ? 'Settled'
+                  : `${balanceInfo.label}: ${formatCurrency(balanceInfo.amount)}`}
+              </strong>
+            </div>
+          )}
+
           <div className="form-row">
             <div className="form-group">
               <label>Date *</label>
               <input type="date" name="date" value={formData.date} onChange={handleChange} required />
             </div>
             <div className="form-group">
-              <label>Amount *</label>
-              <input type="number" name="amount" value={formData.amount} onChange={handleChange} min="0" step="0.01" placeholder="0.00" required />
+              <label>{partyType === 'seller' ? 'Amount Paid *' : 'Amount Received *'}</label>
+              <input
+                type="number"
+                name="amount"
+                value={formData.amount}
+                onChange={handleChange}
+                min="0"
+                step="0.01"
+                placeholder="0.00"
+                required
+              />
             </div>
           </div>
 
-          <div className="form-group">
-            <label>Payment Type *</label>
-            <select name="paymentType" value={formData.paymentType} onChange={handleChange} required>
-              <option value="settlement">Settlement</option>
-              <option value="advance">Advance</option>
-              <option value="due_clearance">Due Clearance</option>
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label>Optional Link to Past Transaction</label>
-            <select name="linkedId" value={formData.linkedId} onChange={handleChange}>
-              <option value="">None</option>
-              {linkedTransactions.map(tx => (
-                <option key={tx.id} value={tx.id}>
-                  {partyType === 'seller'
-                    ? `${tx.date} • Purchase • ${formatCurrency(tx.total_cost || 0)} total`
-                    : `${tx.date} • Invoice ${tx.invoice_number || tx.id.slice(0, 8)} • ${formatCurrency(tx.amount_received || 0)} received`}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {selectedParty && (
+          {selectedParty && formData.amount && Number(formData.amount) > 0 && balanceInfo && (
             <div className="payment-summary">
               <p>
-                Recording payment for <strong>{selectedParty.name}</strong>
-                {selectedParty.store_name ? ` (${selectedParty.store_name})` : ''}.
+                After this payment, balance with <strong>{selectedParty.name}</strong> will become{' '}
+                <strong>
+                  {(() => {
+                    const current = Number(selectedBalance || 0);
+                    const paid = Number(formData.amount);
+                    const next = partyType === 'seller' ? current - paid : current - paid;
+                    const nextInfo = formatBalanceLabel(next);
+                    return nextInfo.amount === 0
+                      ? 'Settled'
+                      : `${nextInfo.label}: ${formatCurrency(nextInfo.amount)}`;
+                  })()}
+                </strong>.
               </p>
             </div>
           )}
 
           <div className="form-actions">
-            <button type="button" className="btn-secondary" onClick={() => setFormData({ partyId: '', amount: '', date: new Date().toISOString().slice(0, 10), paymentType: 'settlement', linkedId: '' })}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setFormData({
+                partyId: '',
+                amount: '',
+                date: new Date().toISOString().slice(0, 10),
+              })}
+            >
               Reset
             </button>
             <button type="submit" className="btn-primary btn-with-icon" disabled={saving}>
               <Plus size={18} />
-              {saving ? 'Saving...' : 'Save Payment'}
+              {saving ? 'Saving...' : partyType === 'seller' ? 'Record Payment to Seller' : 'Record Payment from Buyer'}
             </button>
           </div>
         </form>
+
+        {recentPayments.length > 0 && (
+          <section className="recent-payments">
+            <h2>Recent Standalone Payments</h2>
+            <div className="report-table-wrap">
+              <table className="report-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Party</th>
+                    <th>Direction</th>
+                    <th>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentPayments.map(payment => (
+                    <tr key={payment.id}>
+                      <td>{payment.date}</td>
+                      <td>{partyNameMap[payment.party_id] || 'Unknown'}</td>
+                      <td>{payment.direction === 'to_seller' ? 'Paid to Seller' : 'Received from Buyer'}</td>
+                      <td>{formatCurrency(payment.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );

@@ -54,7 +54,7 @@ const Reports = () => {
         return query;
       };
 
-      const [purchasesResult, salesResult] = await Promise.all([
+      const [purchasesResult, salesResult, paymentsResult] = await Promise.all([
         applyRange(
           supabase
             .from('purchases')
@@ -67,13 +67,21 @@ const Reports = () => {
             .select('id, date, buyer_id, invoice_number, amount_received, status')
             .eq('user_id', user.id)
         ),
+        applyRange(
+          supabase
+            .from('payments')
+            .select('id, date, direction, party_type, party_id, amount, payment_type')
+            .eq('user_id', user.id)
+        ),
       ]);
 
       if (purchasesResult.error) throw purchasesResult.error;
       if (salesResult.error) throw salesResult.error;
+      if (paymentsResult.error) throw paymentsResult.error;
 
       const purchases = purchasesResult.data || [];
       const sales = salesResult.data || [];
+      const payments = paymentsResult.data || [];
       const saleIds = sales.map(row => row.id);
 
       const lineItemsResult = saleIds.length
@@ -99,8 +107,14 @@ const Reports = () => {
 
       const allocations = allocationsResult.data || [];
 
-      const sellerIds = [...new Set(purchases.map(row => row.seller_id).filter(Boolean))];
-      const buyerIds = [...new Set(sales.map(row => row.buyer_id).filter(Boolean))];
+      const sellerIds = [...new Set([
+        ...purchases.map(row => row.seller_id),
+        ...payments.filter(row => row.party_type === 'seller').map(row => row.party_id),
+      ].filter(Boolean))];
+      const buyerIds = [...new Set([
+        ...sales.map(row => row.buyer_id),
+        ...payments.filter(row => row.party_type === 'buyer').map(row => row.party_id),
+      ].filter(Boolean))];
       const productIds = [...new Set([
         ...purchases.map(row => row.product_id),
         ...lineItems.map(row => row.product_id),
@@ -253,7 +267,34 @@ const Reports = () => {
           return a.categoryName.localeCompare(b.categoryName);
         });
 
-      const combinedTransactions = [...purchaseRows, ...saleRows].sort((a, b) => {
+      const paymentRows = payments.map(row => {
+        const party = row.party_type === 'seller'
+          ? sellerMap[row.party_id]
+          : buyerMap[row.party_id];
+        const isToSeller = row.direction === 'to_seller';
+
+        return {
+          id: row.id,
+          key: `payment-${row.id}`,
+          date: row.date,
+          type: 'Payment',
+          party: party
+            ? `${party.name}${party.store_name ? ` - ${party.store_name}` : ''}`
+            : 'Unknown party',
+          products: '—',
+          quantity: null,
+          rate: null,
+          total: Number(row.amount || 0),
+          paid: Number(row.amount || 0),
+          status: 'active',
+          balance: 0,
+          direction: isToSeller ? 'Paid Out' : 'Received',
+          profit: null,
+          cost: null,
+        };
+      });
+
+      const combinedTransactions = [...purchaseRows, ...saleRows, ...paymentRows].sort((a, b) => {
         if (a.date === b.date) return a.key.localeCompare(b.key);
         return b.date.localeCompare(a.date);
       });
