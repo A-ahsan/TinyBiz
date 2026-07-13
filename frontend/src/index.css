@@ -87,3 +87,15 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+/* Number inputs: hide spinner arrows app-wide */
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
