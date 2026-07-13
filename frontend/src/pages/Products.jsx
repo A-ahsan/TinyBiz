@@ -1,8 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/AuthContext';
-import { Trash2, Edit2, Plus, X } from 'lucide-react';
+import { Trash2, Edit2, Plus, X, Check } from 'lucide-react';
 import './Products.css';
+
+const PAGE_SIZE = 20;
+
+const formatStock = (qty, unit) => {
+  const value = Number(qty || 0);
+  const formatted = Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/\.?0+$/, '');
+  return unit ? `${formatted} ${unit}` : formatted;
+};
 
 const Products = () => {
   const { user } = useAuth();
@@ -12,10 +20,15 @@ const Products = () => {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [currentPage, setCurrentPage] = useState(1);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
+  const [editingStockId, setEditingStockId] = useState(null);
+  const [stockDraft, setStockDraft] = useState('');
+  const [savingStockId, setSavingStockId] = useState(null);
   const [formData, setFormData] = useState({
     name: '',
     set_rate: '',
@@ -29,13 +42,18 @@ const Products = () => {
     }
   }, [user]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, categoryFilter]);
+
   const fetchProducts = async () => {
     try {
       setLoading(true);
       setError('');
+
       const [productsResult, categoriesResult] = await Promise.all([
         supabase
-          .from('products')
+          .from('product_stock_levels')
           .select('*')
           .eq('user_id', user.id)
           .order('created_at', { ascending: false }),
@@ -47,8 +65,16 @@ const Products = () => {
           .order('name', { ascending: true }),
       ]);
 
-      if (productsResult.error) throw productsResult.error;
+      if (productsResult.error) {
+        if (productsResult.error.message?.includes('product_stock_levels')) {
+          throw new Error(
+            'Stock view not found. Run database/migrations/001_product_stock.sql in Supabase SQL Editor first.',
+          );
+        }
+        throw productsResult.error;
+      }
       if (categoriesResult.error) throw categoriesResult.error;
+
       setProducts(productsResult.data || []);
       setCategories(categoriesResult.data || []);
     } catch (err) {
@@ -120,7 +146,6 @@ const Products = () => {
       };
 
       if (editingId) {
-        // Update
         const { error: err } = await supabase
           .from('products')
           .update(payload)
@@ -130,7 +155,6 @@ const Products = () => {
         if (err) throw err;
         setSuccess('Product updated successfully');
       } else {
-        // Create
         const { error: err } = await supabase
           .from('products')
           .insert([payload]);
@@ -154,7 +178,7 @@ const Products = () => {
       unit: product.unit || '',
       category_id: product.category_id || '',
     });
-    setEditingId(product.id);
+    setEditingId(product.product_id);
     setShowForm(true);
   };
 
@@ -180,14 +204,88 @@ const Products = () => {
     }
   };
 
-  const filteredProducts = products.filter((p) => {
-    const categoryName = categoryNameById(p.category_id);
-    const text = `${p.name} ${categoryName}`.toLowerCase();
-    return text.includes(searchTerm.toLowerCase());
-  });
+  const startStockEdit = (product) => {
+    if (product.status !== 'active') return;
+    setEditingStockId(product.product_id);
+    setStockDraft(String(Number(product.stock_qty || 0)));
+    setError('');
+  };
+
+  const cancelStockEdit = () => {
+    setEditingStockId(null);
+    setStockDraft('');
+  };
+
+  const saveStockEdit = async (product) => {
+    const target = Number(stockDraft);
+    if (Number.isNaN(target) || target < 0) {
+      setError('Enter a valid stock quantity (0 or more)');
+      return;
+    }
+
+    try {
+      setSavingStockId(product.product_id);
+      setError('');
+
+      const { data, error: rpcErr } = await supabase.rpc('adjust_product_stock', {
+        p_product_id: product.product_id,
+        p_target_stock: target,
+      });
+
+      if (rpcErr) throw rpcErr;
+
+      setProducts(prev => prev.map(row => (
+        row.product_id === product.product_id
+          ? { ...row, stock_qty: data ?? target }
+          : row
+      )));
+
+      setSuccess(`Stock updated for ${product.name}`);
+      cancelStockEdit();
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      setError(err.message || 'Failed to update stock');
+    } finally {
+      setSavingStockId(null);
+    }
+  };
+
+  const filteredProducts = useMemo(() => {
+    return products.filter((product) => {
+      const categoryName = categoryNameById(product.category_id);
+      const text = `${product.name} ${categoryName}`.toLowerCase();
+      const matchesSearch = text.includes(searchTerm.toLowerCase());
+
+      let matchesCategory = true;
+      if (categoryFilter === '__uncategorized__') {
+        matchesCategory = !product.category_id;
+      } else if (categoryFilter !== 'all') {
+        matchesCategory = product.category_id === categoryFilter;
+      }
+
+      return matchesSearch && matchesCategory;
+    });
+  }, [products, searchTerm, categoryFilter, categories]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
+
+  const paginatedProducts = useMemo(() => {
+    const safePage = Math.min(currentPage, totalPages);
+    const start = (safePage - 1) * PAGE_SIZE;
+    return filteredProducts.slice(start, start + PAGE_SIZE);
+  }, [filteredProducts, currentPage, totalPages]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const activeCount = products.filter(p => p.status === 'active').length;
   const archivedCount = products.filter(p => p.status === 'removed').length;
+  const lowStockCount = products.filter(
+    p => p.status === 'active' && Number(p.stock_qty || 0) <= 0,
+  ).length;
 
   if (loading) {
     return (
@@ -202,7 +300,7 @@ const Products = () => {
       <div className="page-header">
         <div>
           <h1>Products</h1>
-          <p>Manage your product catalog and set rates</p>
+          <p>Manage your catalog, stock levels, categories, and set rates</p>
         </div>
         <button onClick={() => setShowForm(true)} className="btn-primary btn-with-icon">
           <Plus size={20} />
@@ -221,6 +319,10 @@ const Products = () => {
         <div className="stat">
           <span className="stat-label">Active</span>
           <span className="stat-value active">{activeCount}</span>
+        </div>
+        <div className="stat">
+          <span className="stat-label">Out of Stock</span>
+          <span className="stat-value archived">{lowStockCount}</span>
         </div>
         <div className="stat">
           <span className="stat-label">Archived</span>
@@ -312,7 +414,7 @@ const Products = () => {
               </div>
 
               <p className="form-hint">
-                Note: Set Rate is optional and only used as a suggestion when creating sales.
+                Stock updates automatically when you record purchases and sales. You can also edit stock directly in the product list.
               </p>
 
               <div className="form-actions">
@@ -331,13 +433,26 @@ const Products = () => {
       <div className="products-section">
         <div className="section-header">
           <h3>All Products ({filteredProducts.length})</h3>
-          <input
-            type="text"
-            placeholder="Search products..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="search-input"
-          />
+          <div className="products-toolbar">
+            <select
+              className="filter-select"
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+            >
+              <option value="all">All categories</option>
+              <option value="__uncategorized__">Uncategorized</option>
+              {categories.map(category => (
+                <option key={category.id} value={category.id}>{category.name}</option>
+              ))}
+            </select>
+            <input
+              type="text"
+              placeholder="Search products..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="search-input"
+            />
+          </div>
         </div>
 
         {filteredProducts.length === 0 ? (
@@ -348,57 +463,132 @@ const Products = () => {
             </button>
           </div>
         ) : (
-          <div className="products-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Category</th>
-                  <th>Unit</th>
-                  <th>Set Rate (BDT)</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredProducts.map(product => (
-                  <tr key={product.id} className={product.status === 'removed' ? 'archived' : ''}>
-                    <td className="name-cell">{product.name}</td>
-                    <td>{categoryNameById(product.category_id)}</td>
-                    <td>{product.unit || '-'}</td>
-                    <td>
-                      {product.set_rate ? `${product.set_rate.toFixed(2)}` : '-'}
-                    </td>
-                    <td>
-                      <span className={`status-badge ${product.status}`}>
-                        {product.status === 'active' ? 'Active' : 'Archived'}
-                      </span>
-                    </td>
-                    <td className="actions-cell">
-                      {product.status === 'active' && (
-                        <>
-                          <button
-                            onClick={() => handleEdit(product)}
-                            className="action-btn edit"
-                            title="Edit"
-                          >
-                            <Edit2 size={18} />
-                          </button>
-                          <button
-                            onClick={() => handleDelete(product.id)}
-                            className="action-btn delete"
-                            title="Archive"
-                          >
-                            <Trash2 size={18} />
-                          </button>
-                        </>
-                      )}
-                    </td>
+          <>
+            <div className="products-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Category</th>
+                    <th>Stock</th>
+                    <th>Unit</th>
+                    <th>Set Rate (BDT)</th>
+                    <th>Status</th>
+                    <th>Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {paginatedProducts.map(product => (
+                    <tr key={product.product_id} className={product.status === 'removed' ? 'archived' : ''}>
+                      <td className="name-cell">{product.name}</td>
+                      <td>{categoryNameById(product.category_id)}</td>
+                      <td className="stock-cell">
+                        {editingStockId === product.product_id ? (
+                          <div className="stock-edit-row">
+                            <input
+                              type="number"
+                              className="stock-input"
+                              value={stockDraft}
+                              onChange={(e) => setStockDraft(e.target.value)}
+                              min="0"
+                              step="0.001"
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') saveStockEdit(product);
+                                if (e.key === 'Escape') cancelStockEdit();
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="action-btn edit"
+                              title="Save stock"
+                              disabled={savingStockId === product.product_id}
+                              onClick={() => saveStockEdit(product)}
+                            >
+                              <Check size={16} />
+                            </button>
+                            <button
+                              type="button"
+                              className="action-btn delete"
+                              title="Cancel"
+                              onClick={cancelStockEdit}
+                            >
+                              <X size={16} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className={`stock-display ${Number(product.stock_qty || 0) <= 0 ? 'stock-empty' : ''}`}
+                            onClick={() => startStockEdit(product)}
+                            disabled={product.status !== 'active'}
+                            title={product.status === 'active' ? 'Click to edit stock' : 'Archived product'}
+                          >
+                            {formatStock(product.stock_qty, product.unit)}
+                          </button>
+                        )}
+                      </td>
+                      <td>{product.unit || '-'}</td>
+                      <td>
+                        {product.set_rate ? `${Number(product.set_rate).toFixed(2)}` : '-'}
+                      </td>
+                      <td>
+                        <span className={`status-badge ${product.status}`}>
+                          {product.status === 'active' ? 'Active' : 'Archived'}
+                        </span>
+                      </td>
+                      <td className="actions-cell">
+                        {product.status === 'active' && (
+                          <>
+                            <button
+                              onClick={() => handleEdit(product)}
+                              className="action-btn edit"
+                              title="Edit"
+                            >
+                              <Edit2 size={18} />
+                            </button>
+                            <button
+                              onClick={() => handleDelete(product.product_id)}
+                              className="action-btn delete"
+                              title="Archive"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {totalPages > 1 && (
+              <div className="pagination-bar">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage(prev => prev - 1)}
+                >
+                  Previous
+                </button>
+                <span className="pagination-info">
+                  Page {Math.min(currentPage, totalPages)} of {totalPages}
+                  {' · '}
+                  Showing {paginatedProducts.length} of {filteredProducts.length}
+                </span>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage(prev => prev + 1)}
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
