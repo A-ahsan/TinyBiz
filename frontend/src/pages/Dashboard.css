@@ -46,6 +46,10 @@
   background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
 }
 
+.metric-icon.owe {
+  background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+}
+
 .metric-icon.advance {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }

@@ -67,10 +67,20 @@ const Buyers = () => {
       return;
     }
     try {
+      // Blank optional fields belong in the database as NULL, not '' — an empty
+      // string is a value, and it defeats every "is this set?" check.
+      const payload = {
+        name: formData.name.trim(),
+        store_name: formData.store_name.trim() || null,
+        location: formData.location.trim() || null,
+        email: formData.email.trim() || null,
+        phone: formData.phone.trim() || null,
+      };
+
       if (editingId) {
         const { error: err } = await supabase
           .from('buyers')
-          .update(formData)
+          .update(payload)
           .eq('id', editingId)
           .eq('user_id', user.id);
         if (err) throw err;
@@ -78,7 +88,7 @@ const Buyers = () => {
       } else {
         const { error: err } = await supabase
           .from('buyers')
-          .insert({ ...formData, user_id: user.id });
+          .insert({ ...payload, user_id: user.id });
         if (err) throw err;
         setSuccess('Buyer added successfully');
       }

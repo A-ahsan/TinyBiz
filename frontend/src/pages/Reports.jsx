@@ -4,8 +4,13 @@ import { jsPDF } from 'jspdf';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/AuthContext';
 import { formatCurrency } from '../utils/helpers';
+import { fetchAllByIds, fetchAllRows } from '../utils/supabaseFetch';
 import SearchableSelect from '../components/SearchableSelect';
 import './Reports.css';
+
+// Names recorded on the transaction win over the live directory, so renaming a
+// product or party never rewrites documents that were already issued.
+const nameAsRecorded = (snapshot, current, fallback) => snapshot || current || fallback;
 
 // "Name - Store", but never "Name - Name" when the store repeats the person.
 const partyLabel = (party, fallback) => {
@@ -18,6 +23,11 @@ const partyLabel = (party, fallback) => {
 
 // Newest first. Same-day entries fall back to created_at so they read in the
 // order they were actually recorded.
+const partyAsRecorded = (snapshot, party, fallback) => partyLabel(
+  snapshot ? { name: snapshot, store_name: party?.store_name } : party,
+  fallback,
+);
+
 const byRecentFirst = (a, b) => {
   if (a.date !== b.date) return String(b.date).localeCompare(String(a.date));
   const aCreated = a.createdAt || '';
@@ -86,84 +96,50 @@ const Reports = () => {
         return query;
       };
 
-      const [purchasesResult, salesResult, paymentsResult] = await Promise.all([
-        applyRange(
-          // select('*') so this keeps working whether or not migration 002
-          // (purchase_group_id / purchase_number) has been applied.
-          supabase
-            .from('purchases')
-            .select('*')
-            .eq('user_id', user.id)
-        ),
-        applyRange(
-          supabase
-            .from('sales')
-            .select('id, date, buyer_id, invoice_number, amount_received, status, created_at')
-            .eq('user_id', user.id)
-        ),
-        applyRange(
-          supabase
-            .from('payments')
-            .select('id, date, direction, party_type, party_id, amount, payment_type, created_at')
-            .eq('user_id', user.id)
-        ),
+      // select('*') everywhere so these keep working whether or not the later
+      // migrations (purchase groups, name snapshots) have been applied yet.
+      const [purchases, sales, payments] = await Promise.all([
+        fetchAllRows(() => applyRange(
+          supabase.from('purchases').select('*').eq('user_id', user.id),
+        ).order('id')),
+        fetchAllRows(() => applyRange(
+          supabase.from('sales').select('*').eq('user_id', user.id),
+        ).order('id')),
+        fetchAllRows(() => applyRange(
+          supabase.from('payments').select('*').eq('user_id', user.id),
+        ).order('id')),
       ]);
 
-      if (purchasesResult.error) throw purchasesResult.error;
-      if (salesResult.error) throw salesResult.error;
-      if (paymentsResult.error) throw paymentsResult.error;
+      const lineItems = await fetchAllByIds(
+        () => supabase.from('sale_line_items').select('*').order('id'),
+        'sale_id',
+        sales.map(row => row.id),
+      );
 
-      const purchases = purchasesResult.data || [];
-      const sales = salesResult.data || [];
-      const payments = paymentsResult.data || [];
-      const saleIds = sales.map(row => row.id);
-
-      const lineItemsResult = saleIds.length
-        ? await supabase
-            .from('sale_line_items')
-            .select('id, sale_id, product_id, quantity, sale_rate, line_total')
-            .in('sale_id', saleIds)
-        : { data: [], error: null };
-
-      if (lineItemsResult.error) throw lineItemsResult.error;
-
-      const lineItems = lineItemsResult.data || [];
-      const lineItemIds = lineItems.map(row => row.id);
-
-      const allocationsResult = lineItemIds.length
-        ? await supabase
-            .from('sale_allocations')
-            .select('sale_line_item_id, cost_allocated')
-            .in('sale_line_item_id', lineItemIds)
-        : { data: [], error: null };
-
-      if (allocationsResult.error) throw allocationsResult.error;
-
-      const allocations = allocationsResult.data || [];
+      const allocations = await fetchAllByIds(
+        () => supabase.from('sale_allocations').select('sale_line_item_id, cost_allocated').order('id'),
+        'sale_line_item_id',
+        lineItems.map(row => row.id),
+      );
 
       // Fetch the full directories, not just parties touched by this range —
       // otherwise the filter dropdowns hide everyone who happened to be quiet.
-      const [sellersResult, buyersResult, productsResult, categoriesResult] = await Promise.all([
-        supabase.from('sellers').select('id, name, store_name, status').eq('user_id', user.id),
-        supabase.from('buyers').select('id, name, store_name, status').eq('user_id', user.id),
-        supabase.from('products').select('*').eq('user_id', user.id),
-        supabase
+      const [sellerRows, buyerRows, productRows, categoryRowsData] = await Promise.all([
+        fetchAllRows(() => supabase.from('sellers').select('id, name, store_name, status').eq('user_id', user.id).order('id')),
+        fetchAllRows(() => supabase.from('buyers').select('id, name, store_name, status').eq('user_id', user.id).order('id')),
+        fetchAllRows(() => supabase.from('products').select('*').eq('user_id', user.id).order('id')),
+        fetchAllRows(() => supabase
           .from('product_categories')
           .select('id, name')
           .eq('user_id', user.id)
           .eq('status', 'active')
-          .order('name', { ascending: true }),
+          .order('name', { ascending: true })),
       ]);
 
-      if (sellersResult.error) throw sellersResult.error;
-      if (buyersResult.error) throw buyersResult.error;
-      if (productsResult.error) throw productsResult.error;
-      if (categoriesResult.error) throw categoriesResult.error;
-
-      const sellerMap = Object.fromEntries((sellersResult.data || []).map(row => [row.id, row]));
-      const buyerMap = Object.fromEntries((buyersResult.data || []).map(row => [row.id, row]));
-      const productMap = Object.fromEntries((productsResult.data || []).map(row => [row.id, row]));
-      const categoryMap = Object.fromEntries((categoriesResult.data || []).map(row => [row.id, row]));
+      const sellerMap = Object.fromEntries(sellerRows.map(row => [row.id, row]));
+      const buyerMap = Object.fromEntries(buyerRows.map(row => [row.id, row]));
+      const productMap = Object.fromEntries(productRows.map(row => [row.id, row]));
+      const categoryMap = Object.fromEntries(categoryRowsData.map(row => [row.id, row]));
 
       const costMap = allocations.reduce((map, row) => {
         map[row.sale_line_item_id] = (map[row.sale_line_item_id] || 0) + Number(row.cost_allocated || 0);
@@ -196,14 +172,14 @@ const Reports = () => {
         const paid = counted.reduce((sum, batch) => sum + Number(batch.amount_paid || 0), 0);
         const balance = total - paid;
 
-        const productNames = [...new Set(
-          batches.map(batch => productMap[batch.product_id]?.name).filter(Boolean),
-        )].join(', ') || 'Unknown product';
+        const productNameOfBatch = batch => nameAsRecorded(
+          batch.product_name_snapshot,
+          productMap[batch.product_id]?.name,
+          'Unknown product',
+        );
+        const productNames = [...new Set(batches.map(productNameOfBatch))].join(', ') || 'Unknown product';
         const quantityByProduct = batches
-          .map((batch) => {
-            const productName = productMap[batch.product_id]?.name || 'Unknown product';
-            return `${productName}: ${Number(batch.quantity || 0).toFixed(3)}`;
-          })
+          .map(batch => `${productNameOfBatch(batch)}: ${Number(batch.quantity || 0).toFixed(3)}`)
           .join(', ');
 
         return {
@@ -213,7 +189,7 @@ const Reports = () => {
           createdAt: first.created_at || '',
           type: 'Purchase',
           partyId: first.seller_id,
-          party: partyLabel(seller, 'Unknown seller'),
+          party: partyAsRecorded(first.seller_name_snapshot, seller, 'Unknown seller'),
           reference: first.purchase_number || '',
           products: productNames,
           quantity: batches.reduce((sum, batch) => sum + Number(batch.quantity || 0), 0),
@@ -235,13 +211,14 @@ const Reports = () => {
         const items = saleLineMap[row.id] || [];
         const saleValue = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
         const costOfGoods = items.reduce((sum, item) => sum + Number(costMap[item.id] || 0), 0);
-        const productNames = [...new Set(items.map(item => productMap[item.product_id]?.name).filter(Boolean))].join(', ') || 'Unknown product';
+        const productNameOfItem = item => nameAsRecorded(
+          item.product_name_snapshot,
+          productMap[item.product_id]?.name,
+          'Unknown product',
+        );
+        const productNames = [...new Set(items.map(productNameOfItem))].join(', ') || 'Unknown product';
         const quantityByProduct = items
-          .map((item) => {
-            const productName = productMap[item.product_id]?.name || 'Unknown product';
-            const qty = Number(item.quantity || 0).toFixed(3);
-            return `${productName}: ${qty}`;
-          })
+          .map(item => `${productNameOfItem(item)}: ${Number(item.quantity || 0).toFixed(3)}`)
           .join(', ');
         const balance = saleValue - Number(row.amount_received || 0);
         const profit = saleValue - costOfGoods;
@@ -253,7 +230,7 @@ const Reports = () => {
           createdAt: row.created_at || '',
           type: 'Sale',
           partyId: row.buyer_id,
-          party: partyLabel(buyer, 'Unknown buyer'),
+          party: partyAsRecorded(row.buyer_name_snapshot, buyer, 'Unknown buyer'),
           products: productNames,
           quantityText: quantityByProduct || '-',
           rate: null,
@@ -284,7 +261,7 @@ const Reports = () => {
             categoryId,
             categoryName,
             productId: line.product_id,
-            productName: product.name || 'Unknown product',
+            productName: nameAsRecorded(line.product_name_snapshot, product.name, 'Unknown product'),
             qtySold: 0,
             saleValue: 0,
             costOfGoods: 0,
@@ -329,8 +306,8 @@ const Reports = () => {
           createdAt: row.created_at || '',
           type: 'Purchase',
           productId: row.product_id,
-          productName: product?.name || 'Unknown product',
-          party: partyLabel(seller, 'Unknown seller'),
+          productName: nameAsRecorded(row.product_name_snapshot, product?.name, 'Unknown product'),
+          party: partyAsRecorded(row.seller_name_snapshot, seller, 'Unknown seller'),
           quantity: Number(row.quantity || 0),
           rate: Number(row.buying_rate || 0),
           total,
@@ -353,8 +330,8 @@ const Reports = () => {
           createdAt: sale?.created_at || '',
           type: 'Sale',
           productId: line.product_id,
-          productName: product?.name || 'Unknown product',
-          party: partyLabel(buyer, 'Unknown buyer'),
+          productName: nameAsRecorded(line.product_name_snapshot, product?.name, 'Unknown product'),
+          party: partyAsRecorded(sale?.buyer_name_snapshot, buyer, 'Unknown buyer'),
           quantity: Number(line.quantity || 0),
           rate: Number(line.sale_rate || 0),
           total,
@@ -378,7 +355,7 @@ const Reports = () => {
           date: row.date,
           createdAt: row.created_at || '',
           type: 'Payment',
-          party: partyLabel(party, 'Unknown party'),
+          party: partyAsRecorded(row.party_name_snapshot, party, 'Unknown party'),
           products: '—',
           quantity: null,
           rate: null,
@@ -399,25 +376,19 @@ const Reports = () => {
       const openingSellerMap = {};
 
       if (rangeMode === 'date') {
-        const [priorSalesResult, priorPurchasesResult, priorPaymentsResult] = await Promise.all([
-          supabase.from('sales').select('id, buyer_id, amount_received, status').eq('user_id', user.id).lt('date', fromDate),
-          supabase.from('purchases').select('seller_id, total_cost, amount_paid, status').eq('user_id', user.id).lt('date', fromDate),
-          supabase.from('payments').select('party_type, party_id, amount').eq('user_id', user.id).lt('date', fromDate),
+        const [priorSales, priorPurchases, priorPayments] = await Promise.all([
+          fetchAllRows(() => supabase.from('sales').select('id, buyer_id, amount_received, status').eq('user_id', user.id).lt('date', fromDate).order('id')),
+          fetchAllRows(() => supabase.from('purchases').select('seller_id, total_cost, amount_paid, status').eq('user_id', user.id).lt('date', fromDate).order('id')),
+          fetchAllRows(() => supabase.from('payments').select('party_type, party_id, amount').eq('user_id', user.id).lt('date', fromDate).order('id')),
         ]);
 
-        if (priorSalesResult.error) throw priorSalesResult.error;
-        if (priorPurchasesResult.error) throw priorPurchasesResult.error;
-        if (priorPaymentsResult.error) throw priorPaymentsResult.error;
+        const priorLines = await fetchAllByIds(
+          () => supabase.from('sale_line_items').select('sale_id, line_total').order('id'),
+          'sale_id',
+          priorSales.map(row => row.id),
+        );
 
-        const priorSales = priorSalesResult.data || [];
-        const priorSaleIds = priorSales.map(row => row.id);
-        const priorLinesResult = priorSaleIds.length
-          ? await supabase.from('sale_line_items').select('sale_id, line_total').in('sale_id', priorSaleIds)
-          : { data: [], error: null };
-
-        if (priorLinesResult.error) throw priorLinesResult.error;
-
-        const priorSaleValue = (priorLinesResult.data || []).reduce((map, line) => {
+        const priorSaleValue = priorLines.reduce((map, line) => {
           map[line.sale_id] = (map[line.sale_id] || 0) + Number(line.line_total || 0);
           return map;
         }, {});
@@ -429,13 +400,13 @@ const Reports = () => {
             + value - Number(sale.amount_received || 0);
         });
 
-        (priorPurchasesResult.data || []).forEach((purchase) => {
+        priorPurchases.forEach((purchase) => {
           if (purchase.status === 'voided') return;
           openingSellerMap[purchase.seller_id] = (openingSellerMap[purchase.seller_id] || 0)
             + Number(purchase.total_cost || 0) - Number(purchase.amount_paid || 0);
         });
 
-        (priorPaymentsResult.data || []).forEach((payment) => {
+        priorPayments.forEach((payment) => {
           const map = payment.party_type === 'buyer' ? openingBuyerMap : openingSellerMap;
           map[payment.party_id] = (map[payment.party_id] || 0) - Number(payment.amount || 0);
         });
@@ -473,7 +444,7 @@ const Reports = () => {
           key: `buyer-payment-${row.id}`,
           date: row.date,
           partyId: row.party_id,
-          partyName: partyLabel(buyerMap[row.party_id], 'Unknown buyer'),
+          partyName: partyAsRecorded(row.party_name_snapshot, buyerMap[row.party_id], 'Unknown buyer'),
           type: 'Payment',
           reference: '-',
           details: 'Payment received',
@@ -502,7 +473,7 @@ const Reports = () => {
           key: `seller-payment-${row.id}`,
           date: row.date,
           partyId: row.party_id,
-          partyName: partyLabel(sellerMap[row.party_id], 'Unknown seller'),
+          partyName: partyAsRecorded(row.party_name_snapshot, sellerMap[row.party_id], 'Unknown seller'),
           type: 'Payment',
           reference: '-',
           details: 'Payment made',
@@ -540,14 +511,14 @@ const Reports = () => {
 
       setTransactions(combinedTransactions);
       setProfitRows([...saleRows].sort(byRecentFirst));
-      setCategories(categoriesResult.data || []);
+      setCategories(categoryRowsData);
       setCategoryRows(categoryProfitRows);
       setProductLogRows(productLog);
-      setProductOptions(toOptions(productsResult.data || [], usedProductIds, product => product.name));
+      setProductOptions(toOptions(productRows, usedProductIds, product => product.name));
       setBuyerLogRows(buyerLog);
       setSellerLogRows(sellerLog);
-      setBuyerOptions(toOptions(buyersResult.data || [], usedBuyerIds, party => partyLabel(party, 'Unknown')));
-      setSellerOptions(toOptions(sellersResult.data || [], usedSellerIds, party => partyLabel(party, 'Unknown')));
+      setBuyerOptions(toOptions(buyerRows, usedBuyerIds, party => partyLabel(party, 'Unknown')));
+      setSellerOptions(toOptions(sellerRows, usedSellerIds, party => partyLabel(party, 'Unknown')));
       setSellerBalances(sellerBalancesResult.data || []);
       setBuyerBalances(buyerBalancesResult.data || []);
       setSellerDirectory(sellerMap);

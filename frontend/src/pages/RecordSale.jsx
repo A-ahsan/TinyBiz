@@ -8,6 +8,20 @@ import './RecordPurchase.css';
 
 const emptyLine = () => ({ product_id: '', quantity: '', sale_rate: '' });
 
+// Used only when the database predates migration 004.
+const legacyInvoiceNumber = () => `INV-${Date.now()}`;
+
+const isMissingInvoiceNumber = (err) => err?.code === '23502'
+  || `${err?.message || ''}`.toLowerCase().includes('invoice_number');
+
+// The counter RPC is the source of truth; the timestamp is a last resort so a
+// sale is never blocked by a missing migration.
+const nextInvoiceNumber = async () => {
+  const { data, error } = await supabase.rpc('next_invoice_number');
+  if (error || !data) return legacyInvoiceNumber();
+  return data;
+};
+
 const RecordSale = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -227,13 +241,14 @@ const RecordSale = () => {
       return setError('Please complete all line items');
     }
 
-    const invoiceNumber = `INV-${Date.now()}`;
-
     try {
       setSubmitting(true);
       const amountReceivedValue = amountReceived ? Number(amountReceived) : 0;
 
-      const { data, error: rpcErr } = await supabase.rpc('perform_sale', {
+      // Passing null lets perform_sale issue the next sequential number from the
+      // per-user counter, inside the sale's own transaction — so numbers are
+      // unique and gap-free even if two sales are submitted at once.
+      const runPerformSale = (invoiceNumber) => supabase.rpc('perform_sale', {
         p_buyer_id: buyerId,
         p_invoice_number: invoiceNumber,
         p_date: date,
@@ -241,12 +256,24 @@ const RecordSale = () => {
         p_lines: JSON.stringify(cleanedLines),
       });
 
+      let { data, error: rpcErr } = await runPerformSale(null);
+
+      // Database not yet on migration 004: the old perform_sale cannot generate
+      // a number, so fall back to the previous timestamp scheme.
+      if (rpcErr && isMissingInvoiceNumber(rpcErr)) {
+        ({ data, error: rpcErr } = await runPerformSale(legacyInvoiceNumber()));
+      }
+
       let saleId = null;
       if (rpcErr) {
         const message = `${rpcErr.message || ''}`.toLowerCase();
         const missingRpc = rpcErr.code === 'PGRST202' || message.includes('could not find the function public.perform_sale');
         if (!missingRpc) throw rpcErr;
-        saleId = await fallbackRecordSale({ invoiceNumber, cleanedLines, amountReceivedValue });
+        saleId = await fallbackRecordSale({
+          invoiceNumber: await nextInvoiceNumber(),
+          cleanedLines,
+          amountReceivedValue,
+        });
       } else {
         saleId = typeof data === 'string' ? data : data?.id || data?.toString?.();
       }

@@ -374,6 +374,7 @@ as $$
 declare
   v_user_id uuid := auth.uid();
   v_sale_id uuid;
+  v_invoice_number text;
   v_line json;
   v_product_id uuid;
   v_qty numeric;
@@ -388,9 +389,15 @@ begin
     raise exception 'not authenticated';
   end if;
 
+  -- Null/blank invoice number => issue the next sequential one (see section 16)
+  v_invoice_number := nullif(btrim(coalesce(p_invoice_number, '')), '');
+  if v_invoice_number is null then
+    v_invoice_number := next_invoice_number();
+  end if;
+
   -- Create sale header
   insert into sales(user_id, buyer_id, invoice_number, date, amount_received)
-  values (v_user_id, p_buyer_id, p_invoice_number, p_date, p_amount_received)
+  values (v_user_id, p_buyer_id, v_invoice_number, p_date, p_amount_received)
   returning id into v_sale_id;
 
   -- Iterate lines
@@ -689,4 +696,153 @@ grant select on product_stock_levels to authenticated;
 
 grant execute on function get_adjustment_seller_id() to authenticated;
 grant execute on function adjust_product_stock(uuid, numeric) to authenticated;
+
+-- =============================================================================
+-- 16. SEQUENTIAL INVOICE NUMBERS
+-- (Also available as database/migrations/004_invoice_numbers.sql)
+-- perform_sale calls next_invoice_number() when given a null invoice number.
+-- =============================================================================
+
+create table if not exists invoice_counters (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  next_number bigint not null default 0
+);
+
+alter table invoice_counters enable row level security;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where tablename = 'invoice_counters'
+      and policyname = 'Users manage their own invoice counter'
+  ) then
+    create policy "Users manage their own invoice counter"
+      on invoice_counters for all
+      using (user_id = auth.uid())
+      with check (user_id = auth.uid());
+  end if;
+end
+$$;
+
+create or replace function next_invoice_number()
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_number bigint;
+begin
+  if v_user_id is null then
+    raise exception 'not authenticated';
+  end if;
+
+  insert into invoice_counters (user_id, next_number)
+  values (v_user_id, 1)
+  on conflict (user_id)
+  do update set next_number = invoice_counters.next_number + 1
+  returning next_number into v_number;
+
+  return 'INV-' || lpad(v_number::text, 5, '0');
+end;
+$$;
+
+grant execute on function next_invoice_number() to authenticated;
+
+create unique index if not exists idx_sales_user_invoice_number
+  on sales (user_id, invoice_number);
+
+-- =============================================================================
+-- 17. HISTORY SNAPSHOTS
+-- (Also available as database/migrations/005_history_snapshots.sql)
+-- Transactions keep the product/party name they were recorded with, so renaming
+-- never rewrites an already-issued invoice or a past log entry.
+-- =============================================================================
+
+alter table purchases       add column if not exists seller_name_snapshot  text;
+alter table purchases       add column if not exists product_name_snapshot text;
+alter table sales           add column if not exists buyer_name_snapshot   text;
+alter table sale_line_items add column if not exists product_name_snapshot text;
+alter table payments        add column if not exists party_name_snapshot   text;
+
+create or replace function snapshot_purchase_names()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.seller_name_snapshot is null then
+    select name into new.seller_name_snapshot from sellers where id = new.seller_id;
+  end if;
+  if new.product_name_snapshot is null then
+    select name into new.product_name_snapshot from products where id = new.product_id;
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function snapshot_sale_names()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.buyer_name_snapshot is null then
+    select name into new.buyer_name_snapshot from buyers where id = new.buyer_id;
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function snapshot_line_item_names()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.product_name_snapshot is null then
+    select name into new.product_name_snapshot from products where id = new.product_id;
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function snapshot_payment_names()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.party_name_snapshot is null then
+    if new.party_type = 'seller' then
+      select name into new.party_name_snapshot from sellers where id = new.party_id;
+    else
+      select name into new.party_name_snapshot from buyers where id = new.party_id;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_snapshot_purchase_names on purchases;
+create trigger trg_snapshot_purchase_names
+  before insert on purchases
+  for each row execute function snapshot_purchase_names();
+
+drop trigger if exists trg_snapshot_sale_names on sales;
+create trigger trg_snapshot_sale_names
+  before insert on sales
+  for each row execute function snapshot_sale_names();
+
+drop trigger if exists trg_snapshot_line_item_names on sale_line_items;
+create trigger trg_snapshot_line_item_names
+  before insert on sale_line_items
+  for each row execute function snapshot_line_item_names();
+
+drop trigger if exists trg_snapshot_payment_names on payments;
+create trigger trg_snapshot_payment_names
+  before insert on payments
+  for each row execute function snapshot_payment_names();
 

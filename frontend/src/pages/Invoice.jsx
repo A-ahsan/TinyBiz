@@ -30,7 +30,7 @@ const Invoice = () => {
 
       const { data: saleData, error: saleErr } = await supabase
         .from('sales')
-        .select('id, date, invoice_number, amount_received, status, buyer_id')
+        .select('*')
         .eq('id', saleId)
         .single();
 
@@ -46,7 +46,7 @@ const Invoice = () => {
 
       const { data: lineData, error: lineErr } = await supabase
         .from('sale_line_items')
-        .select('id, product_id, quantity, sale_rate, line_total')
+        .select('*')
         .eq('sale_id', saleId);
 
       if (lineErr) throw lineErr;
@@ -82,7 +82,13 @@ const Invoice = () => {
     };
   }, [lineItems, sale]);
 
-  const getProductName = (productId) => products.find(product => product.id === productId)?.name || 'Unknown product';
+  // An issued invoice keeps the names it was issued with — renaming a product or
+  // buyer afterwards must not alter it.
+  const getProductName = (line) => line.product_name_snapshot
+    || products.find(product => product.id === line.product_id)?.name
+    || 'Unknown product';
+
+  const buyerName = sale?.buyer_name_snapshot || buyer?.name || 'Unknown buyer';
 
   const downloadPdf = () => {
     if (!sale || !buyer) return;
@@ -101,7 +107,7 @@ const Invoice = () => {
     doc.text(`Invoice #: ${sale.invoice_number}`, 14, y);
     doc.text(`Date: ${sale.date}`, 120, y);
     y += 6;
-    doc.text(`Buyer: ${buyer.name}${buyer.store_name ? ` (${buyer.store_name})` : ''}`, 14, y);
+    doc.text(`Buyer: ${buyerName}${buyer.store_name ? ` (${buyer.store_name})` : ''}`, 14, y);
     y += 10;
 
     doc.setFontSize(11);
@@ -109,7 +115,7 @@ const Invoice = () => {
     y += 6;
 
     lineItems.forEach((line, index) => {
-      const productName = getProductName(line.product_id);
+      const productName = getProductName(line);
       doc.setFontSize(10);
       doc.text(`${index + 1}. ${productName}`, 14, y);
       doc.text(`Qty: ${line.quantity}`, 90, y);
@@ -186,7 +192,7 @@ const Invoice = () => {
 
         <div className="invoice-buyer">
           <h3>Bill To</h3>
-          <p>{buyer?.name}</p>
+          <p>{buyerName}</p>
           {buyer?.store_name && <p>{buyer.store_name}</p>}
           {buyer?.location && <p>{buyer.location}</p>}
           {buyer?.email && <p>{buyer.email}</p>}
@@ -206,7 +212,7 @@ const Invoice = () => {
             <tbody>
               {lineItems.map(line => (
                 <tr key={line.id}>
-                  <td>{getProductName(line.product_id)}</td>
+                  <td>{getProductName(line)}</td>
                   <td>{Number(line.quantity || 0).toFixed(3)}</td>
                   <td>{formatCurrency(line.sale_rate)}</td>
                   <td>{formatCurrency(line.line_total)}</td>

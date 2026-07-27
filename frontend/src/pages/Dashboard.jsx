@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { formatCurrency } from '../utils/helpers';
-import { TrendingUp, DollarSign, Users, ShoppingCart } from 'lucide-react';
+import { fetchAllByIds, fetchAllRows } from '../utils/supabaseFetch';
+import { TrendingUp, DollarSign, Users, ShoppingCart, ArrowDownLeft, ArrowUpRight } from 'lucide-react';
 import './Dashboard.css';
 
 const Dashboard = () => {
   const [metrics, setMetrics] = useState({
-    totalDues: 0,
-    totalAdvances: 0,
+    buyersOweMe: 0,
+    iOweSellers: 0,
+    buyerAdvances: 0,
+    sellerAdvances: 0,
     totalSales: 0,
     totalProfit: 0,
   });
@@ -26,63 +30,66 @@ const Dashboard = () => {
       const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
       const currentDate = today.toISOString().slice(0, 10);
 
-      const [{ data: sellerBalances }, { data: buyerBalances }, { data: monthlySales }] = await Promise.all([
-        supabase.from('seller_balances').select('seller_id, running_balance').eq('user_id', user.id),
-        supabase.from('buyer_balances').select('buyer_id, running_balance').eq('user_id', user.id),
-        supabase
+      const [sellerBalances, buyerBalances, monthlySales] = await Promise.all([
+        fetchAllRows(() => supabase.from('seller_balances').select('seller_id, running_balance').eq('user_id', user.id).order('seller_id')),
+        fetchAllRows(() => supabase.from('buyer_balances').select('buyer_id, running_balance').eq('user_id', user.id).order('buyer_id')),
+        fetchAllRows(() => supabase
           .from('sales')
           .select('id')
           .eq('user_id', user.id)
           .eq('status', 'active')
           .gte('date', startOfMonth)
-          .lte('date', currentDate),
+          .lte('date', currentDate)
+          .order('id')),
       ]);
 
-      let totalDues = 0;
-      let totalAdvances = 0;
+      // Money owed TO you and money owed BY you are different facts and must
+      // never be added together.
+      let buyersOweMe = 0;
+      let iOweSellers = 0;
+      let buyerAdvances = 0;
+      let sellerAdvances = 0;
       let totalSales = 0;
       let totalProfit = 0;
 
-      const addBalance = (balance) => {
-        if (balance > 0) totalDues += balance;
-        else totalAdvances += Math.abs(balance);
-      };
+      buyerBalances.forEach((row) => {
+        const balance = Number(row.running_balance || 0);
+        if (balance > 0) buyersOweMe += balance;
+        else buyerAdvances += Math.abs(balance);
+      });
 
-      if (sellerBalances) sellerBalances.forEach((row) => addBalance(Number(row.running_balance || 0)));
-      if (buyerBalances) buyerBalances.forEach((row) => addBalance(Number(row.running_balance || 0)));
+      sellerBalances.forEach((row) => {
+        const balance = Number(row.running_balance || 0);
+        if (balance > 0) iOweSellers += balance;
+        else sellerAdvances += Math.abs(balance);
+      });
 
-      const saleIds = (monthlySales || []).map((sale) => sale.id);
-      if (saleIds.length > 0) {
-        const [saleLineItemsResult] = await Promise.all([
-          supabase
-            .from('sale_line_items')
-            .select('id, sale_id, line_total')
-            .in('sale_id', saleIds),
-        ]);
+      const saleLineItems = await fetchAllByIds(
+        () => supabase.from('sale_line_items').select('id, sale_id, line_total').order('id'),
+        'sale_id',
+        monthlySales.map((sale) => sale.id),
+      );
 
-        const saleLineItems = saleLineItemsResult.data || [];
-        const lineItemIds = saleLineItems.map((lineItem) => lineItem.id);
+      totalSales = saleLineItems.reduce((sum, lineItem) => sum + Number(lineItem.line_total || 0), 0);
 
-        totalSales = saleLineItems.reduce((sum, lineItem) => sum + Number(lineItem.line_total || 0), 0);
+      const allocations = await fetchAllByIds(
+        () => supabase.from('sale_allocations').select('sale_line_item_id, cost_allocated').order('id'),
+        'sale_line_item_id',
+        saleLineItems.map((lineItem) => lineItem.id),
+      );
 
-        if (lineItemIds.length > 0) {
-          const { data: allocations } = await supabase
-            .from('sale_allocations')
-            .select('sale_line_item_id, cost_allocated')
-            .in('sale_line_item_id', lineItemIds);
+      const totalCost = allocations.reduce(
+        (sum, allocation) => sum + Number(allocation.cost_allocated || 0),
+        0,
+      );
 
-          const totalCost = (allocations || []).reduce(
-            (sum, allocation) => sum + Number(allocation.cost_allocated || 0),
-            0,
-          );
-
-          totalProfit = totalSales - totalCost;
-        }
-      }
+      totalProfit = totalSales - totalCost;
 
       setMetrics({
-        totalDues,
-        totalAdvances,
+        buyersOweMe,
+        iOweSellers,
+        buyerAdvances,
+        sellerAdvances,
         totalSales,
         totalProfit,
       });
@@ -111,12 +118,34 @@ const Dashboard = () => {
       <div className="metrics-grid">
         <div className="metric-card">
           <div className="metric-icon due">
+            <ArrowDownLeft size={28} />
+          </div>
+          <div className="metric-content">
+            <p className="metric-label">Buyers Owe Me</p>
+            <h3 className="metric-value">{formatCurrency(metrics.buyersOweMe)}</h3>
+            <p className="metric-description">Receivable</p>
+          </div>
+        </div>
+
+        <div className="metric-card">
+          <div className="metric-icon owe">
+            <ArrowUpRight size={28} />
+          </div>
+          <div className="metric-content">
+            <p className="metric-label">I Owe Sellers</p>
+            <h3 className="metric-value">{formatCurrency(metrics.iOweSellers)}</h3>
+            <p className="metric-description">Payable</p>
+          </div>
+        </div>
+
+        <div className="metric-card">
+          <div className="metric-icon advance">
             <DollarSign size={28} />
           </div>
           <div className="metric-content">
-            <p className="metric-label">Total Due</p>
-            <h3 className="metric-value">{formatCurrency(metrics.totalDues)}</h3>
-            <p className="metric-description">Money owed</p>
+            <p className="metric-label">Buyer Advances Held</p>
+            <h3 className="metric-value">{formatCurrency(metrics.buyerAdvances)}</h3>
+            <p className="metric-description">Paid to me upfront</p>
           </div>
         </div>
 
@@ -125,9 +154,9 @@ const Dashboard = () => {
             <TrendingUp size={28} />
           </div>
           <div className="metric-content">
-            <p className="metric-label">Total Advance</p>
-            <h3 className="metric-value">{formatCurrency(metrics.totalAdvances)}</h3>
-            <p className="metric-description">Prepaid/Credit</p>
+            <p className="metric-label">Advances With Sellers</p>
+            <h3 className="metric-value">{formatCurrency(metrics.sellerAdvances)}</h3>
+            <p className="metric-description">I prepaid them</p>
           </div>
         </div>
 
@@ -162,10 +191,10 @@ const Dashboard = () => {
             Then record your purchases and sales to track inventory and profitability.
           </p>
           <div className="quick-actions">
-            <a href="/products" className="action-button">Add Products</a>
-            <a href="/sellers" className="action-button">Add Sellers</a>
-            <a href="/buyers" className="action-button">Add Buyers</a>
-            <a href="/purchase" className="action-button primary">Record Purchase</a>
+            <Link to="/products" className="action-button">Add Products</Link>
+            <Link to="/sellers" className="action-button">Add Sellers</Link>
+            <Link to="/buyers" className="action-button">Add Buyers</Link>
+            <Link to="/purchase" className="action-button primary">Record Purchase</Link>
           </div>
         </div>
       </div>
