@@ -1,11 +1,32 @@
+import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../lib/AuthContext';
 import { LogOut, BarChart3, ShoppingCart, Users, FileText, TrendingUp, Home, Wallet } from 'lucide-react';
 import './Sidebar.css';
 
+const formatClockDate = (value) => value.toLocaleDateString('en-GB', {
+  weekday: 'short',
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+});
+
+const formatClockTime = (value) => value.toLocaleTimeString('en-US', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: true,
+});
+
 const Sidebar = () => {
   const { signOut, profile } = useAuth();
   const location = useLocation();
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const handleLogout = async () => {
     try {
@@ -22,6 +43,10 @@ const Sidebar = () => {
       <div className="sidebar-header">
         <h1>{profile?.business_name || 'TinyBiz'}</h1>
         <p className="user-name">{profile?.name || 'User'}</p>
+        <div className="sidebar-clock">
+          <span className="clock-date">{formatClockDate(now)}</span>
+          <span className="clock-time">{formatClockTime(now)}</span>
+        </div>
       </div>
 
       <nav className="sidebar-nav">

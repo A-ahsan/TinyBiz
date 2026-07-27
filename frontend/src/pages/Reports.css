@@ -6,7 +6,7 @@
 
 .report-summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 1rem;
 }
 
@@ -16,6 +16,7 @@
   border-radius: 12px;
   padding: 1rem;
   box-shadow: var(--shadow-md);
+  min-width: 0;
 }
 
 .summary-label {
@@ -28,8 +29,12 @@
 }
 
 .summary-card strong {
-  font-size: clamp(1.1rem, 2.5vw, 1.4rem);
+  display: block;
+  /* Large BDT figures must shrink and wrap inside the card, never spill out. */
+  font-size: clamp(0.95rem, 1.5vw, 1.25rem);
+  line-height: 1.25;
   color: var(--gray-900);
+  overflow-wrap: anywhere;
 }
 
 .report-toolbar {
@@ -138,6 +143,27 @@
   margin-bottom: 1rem;
 }
 
+.product-filter-row {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.log-opening-note {
+  margin-bottom: 1rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 8px;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-200);
+  color: var(--gray-700);
+  font-size: 0.9rem;
+}
+
+.product-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin-bottom: 1rem;
+}
+
 .category-filter-row label {
   display: grid;
   gap: 0.35rem;
@@ -164,6 +190,19 @@
   width: 100%;
   border-collapse: collapse;
   min-width: 860px;
+}
+
+/* Keep each value on one line and let the wrapper scroll sideways instead —
+   wrapping long party names into a tall column of words is unreadable. */
+.report-table th,
+.report-table td {
+  white-space: nowrap;
+  padding: 0.85rem 1rem;
+  vertical-align: middle;
+}
+
+.report-table th {
+  white-space: normal;
 }
 
 .report-table th,

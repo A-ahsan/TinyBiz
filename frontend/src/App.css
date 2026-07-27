@@ -66,9 +66,11 @@ a {
 
 .app-container {
   display: flex;
-  height: 100vh;
+  height: 100dvh;
   width: 100%;
-  flex-wrap: wrap;
+  /* The shell itself never scrolls — only .main-content does, which keeps the
+     sidebar pinned instead of scrolling away with the page. */
+  overflow: hidden;
 }
 
 .main-content {
@@ -77,11 +79,15 @@ a {
   padding: 1.5rem;
   background: var(--gray-50);
   min-width: 0;
+  text-align: left;
 }
 
 @media (max-width: 768px) {
   .app-container {
     flex-direction: column;
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
   }
   .main-content {
     padding: 1rem;

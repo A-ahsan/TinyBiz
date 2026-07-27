@@ -1,0 +1,118 @@
+.searchable-select {
+  position: relative;
+  width: 100%;
+}
+
+/* Matches the app's input styling, and resets the global uppercase button rules. */
+.ss-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.875rem 1rem;
+  border: 1.5px solid var(--app-border);
+  border-radius: 8px;
+  background-color: var(--input-bg);
+  color: var(--input-text);
+  font-size: 1rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  text-align: left;
+}
+
+.ss-trigger:hover:not(:disabled) {
+  border-color: var(--gray-400);
+}
+
+.ss-trigger:disabled {
+  background-color: var(--gray-100);
+  color: var(--gray-500);
+  cursor: not-allowed;
+}
+
+.ss-trigger.is-placeholder .ss-trigger-text {
+  color: var(--input-placeholder);
+}
+
+.ss-trigger-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ss-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
+  border: 1.5px solid var(--primary);
+  border-radius: 8px;
+  background: var(--input-bg);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+}
+
+.ss-search-icon {
+  color: var(--gray-500);
+  flex-shrink: 0;
+}
+
+.ss-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  padding: 0.875rem 0;
+  font-size: 1rem;
+  background: transparent;
+  color: var(--input-text);
+}
+
+.ss-list {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.3rem;
+  list-style: none;
+  background: var(--card-bg);
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+}
+
+.ss-option {
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gray-800);
+  font-size: 0.95rem;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+  text-align: left;
+}
+
+.ss-option.is-active {
+  background: var(--gray-100);
+}
+
+.ss-option.is-selected {
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--primary-dark);
+  font-weight: 600;
+}
+
+.ss-empty {
+  padding: 0.75rem;
+  color: var(--gray-500);
+  font-size: 0.9rem;
+  text-align: center;
+}

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/AuthContext';
 import { formatCurrency } from '../utils/helpers';
+import SearchableSelect from '../components/SearchableSelect';
 import { Plus } from 'lucide-react';
 import './RecordPayment.css';
 
@@ -201,14 +202,16 @@ const RecordPayment = () => {
 
           <div className="form-group">
             <label>{partyType === 'seller' ? 'Seller *' : 'Buyer *'}</label>
-            <select name="partyId" value={formData.partyId} onChange={handleChange} required>
-              <option value="">Select {partyType}</option>
-              {parties.map(party => (
-                <option key={party.id} value={party.id}>
-                  {party.name}{party.store_name ? ` • ${party.store_name}` : ''}
-                </option>
-              ))}
-            </select>
+            <SearchableSelect
+              value={formData.partyId}
+              onChange={(partyId) => setFormData(prev => ({ ...prev, partyId }))}
+              placeholder={`Search ${partyType}s...`}
+              emptyText={`No ${partyType} matches`}
+              options={parties.map(party => ({
+                value: party.id,
+                label: party.store_name ? `${party.name} • ${party.store_name}` : party.name,
+              }))}
+            />
           </div>
 
           {selectedParty && balanceInfo && (

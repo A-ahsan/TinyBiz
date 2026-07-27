@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/AuthContext';
+import SearchableSelect from '../components/SearchableSelect';
 import './Page.css';
 import './RecordPurchase.css';
 
@@ -295,10 +296,18 @@ const RecordSale = () => {
           <div className="form-group" style={{ flex: 1 }}>
             <label>Buyer *</label>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <select value={buyerId} onChange={e => setBuyerId(e.target.value)} required style={{ flex: 1 }}>
-                <option value="">Select buyer</option>
-                {buyers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
+              <div style={{ flex: 1 }}>
+                <SearchableSelect
+                  value={buyerId}
+                  onChange={setBuyerId}
+                  placeholder="Select buyer"
+                  emptyText="No buyer matches"
+                  options={buyers.map(b => ({
+                    value: b.id,
+                    label: b.store_name ? `${b.name} • ${b.store_name}` : b.name,
+                  }))}
+                />
+              </div>
               <button type="button" className="btn-secondary" onClick={() => setShowAddBuyer(v => !v)}>{showAddBuyer ? 'Cancel' : 'Add'}</button>
             </div>
 
@@ -325,10 +334,13 @@ const RecordSale = () => {
             <div className="form-row" key={idx} style={{ alignItems: 'end' }}>
               <div className="form-group">
                 <label>Product</label>
-                <select value={line.product_id} onChange={e => handleProductChange(idx, e.target.value)} required>
-                  <option value="">Select product</option>
-                  {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
+                <SearchableSelect
+                  value={line.product_id}
+                  onChange={(productId) => handleProductChange(idx, productId)}
+                  placeholder="Select product"
+                  emptyText="No product matches"
+                  options={products.map(p => ({ value: p.id, label: p.name }))}
+                />
               </div>
               <div className="form-group">
                 <label>Quantity</label>

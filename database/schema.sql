@@ -150,6 +150,8 @@ create table if not exists purchases (
   total_cost numeric(14,2) generated always as (quantity * buying_rate) stored,
   amount_paid numeric(14,2) not null default 0,
   remaining_qty numeric(12,3) not null,   -- starts equal to quantity, decremented on sale allocation
+  purchase_group_id uuid,                 -- items bought together share one group (see migration 002)
+  purchase_number text,                   -- human-readable reference for that group, e.g. PUR-00012
   status text not null default 'active' check (status in ('active','voided')),
   created_at timestamptz default now()
 );
@@ -160,6 +162,11 @@ create policy "Users manage their own purchases"
   on purchases for all
   using (user_id = auth.uid())
   with check (user_id = auth.uid());
+
+-- Group support for existing databases.
+alter table purchases add column if not exists purchase_group_id uuid;
+alter table purchases add column if not exists purchase_number text;
+update purchases set purchase_group_id = id where purchase_group_id is null;
 
 -- =============================================================================
 -- 6. SALES TABLE (each sale = one invoice header)
@@ -315,6 +322,7 @@ create index if not exists idx_purchases_seller_id on purchases(seller_id);
 create index if not exists idx_purchases_product_id on purchases(product_id);
 create index if not exists idx_purchases_status on purchases(status);
 create index if not exists idx_purchases_date on purchases(date);
+create index if not exists idx_purchases_group_id on purchases(purchase_group_id);
 
 create index if not exists idx_sales_user_id on sales(user_id);
 create index if not exists idx_sales_buyer_id on sales(buyer_id);
